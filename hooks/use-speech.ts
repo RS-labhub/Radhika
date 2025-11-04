@@ -91,32 +91,41 @@ export function useSpeech() {
       const isHindiScript = /[\u0900-\u097F]/.test(cleanedText);
       const isHinglish = /\b(mera|tum|kya|hai|nahi|kaise|acha|haan|kyun|main|sab|pyaar|dil|kaisi|batao|suno|aise|vaise|ni|nhi|achaa|baat|mujhe|tumhe|kon|kahan)\b/i.test(cleanedText);
       const isHindi = isHindiScript || isHinglish;
-      const isSpanish = /[ñáéíóúü]/i.test(cleanedText);
-      const isFrench = /[àâäéèêëïîôöùûüÿç]/i.test(cleanedText);
+      const isEnglish = /^[a-zA-Z0-9\s,.!?'-]+$/.test(cleanedText);
+
+      // Helper: filter for GenZ/teen girl voices
+      const genzGirlKeywords = [
+        "teen", "girl", "young", "genz", "zira", "samantha", "female", "woman", "google uk english female", "google hindi", "maya", "swara", "padma", "kajal", "karen", "anya", "natasha", "neha", "raveena", "soni", "priya"
+      ];
 
       let selectedVoice: SpeechSynthesisVoice | null = null;
 
       if (isHindi) {
-        selectedVoice = voices.find(v => v.lang === "hi-IN")
+        // Prefer Google Hindi or young Indian female voices
+        selectedVoice = voices.find(v => v.lang === "hi-IN" && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
+          ?? voices.find(v => v.lang === "hi-IN")
+          ?? voices.find(v => v.lang === "en-IN" && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
           ?? voices.find(v => v.lang === "en-IN")
+          ?? voices.find(v => genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
+          ?? voices.find(v => v.lang.startsWith("en"))
           ?? null;
-      } else if (isSpanish) {
-        selectedVoice = voices.find(v => v.lang.startsWith("es")) ?? null;
-      } else if (isFrench) {
-        selectedVoice = voices.find(v => v.lang.startsWith("fr")) ?? null;
-      }
-
-      // Fallbacks: Indian or female English
-      if (!selectedVoice) {
-        selectedVoice =
-          voices.find((v) => v.lang === "en-IN") ??
-          voices.find((v) =>
-            ["swara", "maya", "kajal", "padma", "zira", "karen", "samantha", "female", "woman", "española"].some((name) =>
-              v.name.toLowerCase().includes(name)
-            )
-          ) ??
-          voices.find((v) => v.lang.startsWith("en")) ??
-          null;
+        utterance.lang = "hi-IN";
+      } else if (isEnglish) {
+        // Prefer young/teen/GenZ/female English voices
+        selectedVoice = voices.find(v => v.lang.startsWith("en") && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
+          ?? voices.find(v => v.lang === "en-GB" && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
+          ?? voices.find(v => v.lang === "en-US" && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
+          // No gender property in SpeechSynthesisVoice, rely on name/language only
+          ?? voices.find(v => v.lang.startsWith("en"))
+          ?? voices.find(v => genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
+          ?? null;
+        utterance.lang = "en-US";
+      } else {
+        // Fallback: try to match language, prefer female
+        selectedVoice = voices.find(v => genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
+          // No gender property in SpeechSynthesisVoice, rely on name/language only
+          ?? voices.find(v => v.lang.startsWith("en"))
+          ?? voices[0] ?? null;
       }
 
       if (selectedVoice) {
