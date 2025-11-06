@@ -10,7 +10,12 @@ const config: Config = {
   ],
   theme: {
   	extend: {
-  		colors: {
+		fontFamily: {
+			sans: ['var(--font-sans)', 'system-ui', 'sans-serif'],
+			display: ['var(--font-display)', 'var(--font-sans)', 'system-ui', 'sans-serif'],
+			pixel: ['var(--font-pixel)', '"Courier New"', 'monospace']
+		},
+		colors: {
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',
   			card: {
@@ -37,10 +42,10 @@ const config: Config = {
   				DEFAULT: 'hsl(var(--accent))',
   				foreground: 'hsl(var(--accent-foreground))'
   			},
-  			destructive: {
-  				DEFAULT: 'hsl(var(--destructive))',
-  				foreground: 'hsl(var(--destructive-foreground))'
-  			},
+			destructive: {
+				DEFAULT: 'hsl(var(--destructive))',
+				foreground: 'hsl(var(--destructive-foreground))'
+			},
   			border: 'hsl(var(--border))',
   			input: 'hsl(var(--input))',
   			ring: 'hsl(var(--ring))',

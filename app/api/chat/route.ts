@@ -1,35 +1,32 @@
-import { createOpenAI } from "@ai-sdk/openai"
+import { openai } from "@ai-sdk/openai"
 import { streamText } from "ai"
 import { google } from "@ai-sdk/google"
-import { anthropic } from "@ai-sdk/anthropic"
+import { createAnthropic } from "@ai-sdk/anthropic"
+import { createOpenAI } from "@ai-sdk/openai"
+import { groq } from "@ai-sdk/groq"
 
 // Allow streaming responses up to 60 seconds for complex reasoning
 export const maxDuration = 60
-
-const groq = createOpenAI({
-  baseURL: "https://api.groq.com/openai/v1",
-  apiKey: process.env.GROQ_API_KEY,
-})
 
 // Different models for different purposes
 const MODELS = {
   groq: {
     fast: "llama-3.1-8b-instant", // Quick responses, casual chat
     reasoning: "llama-3.3-70b-versatile", // Complex analysis, problem-solving
-    creative: "qwen/qwen3-32b", // Creative tasks, brainstorming  
+    creative: "openai/gpt-oss-120b", // Creative tasks, brainstorming  
   },
   gemini: {
-    default: "gemini-2.0-flash",
+    default: "gemini-2.5-flash",
   },
   openai: {
-    default: "gpt-4o",
+    default: "gpt-5",
     turbo: "gpt-4-turbo",
-    fast: "gpt-3.5-turbo",
+    fast: "gpt-4o-mini",
   },
   claude: {
-    default: "claude-3-5-sonnet-20241022",
-    sonnet: "claude-3-sonnet-20240229",
-    haiku: "claude-3-haiku-20240307",
+    default: "claude-opus-4-1-20250805",
+    sonnet: "claude-sonnet-4-5-20250929",
+    haiku: "claude-haiku-4-5-20251001",
   },
 }
 
@@ -68,6 +65,7 @@ If someone asks who made you or related question, then you will say,"Rohan Sharm
 - Track learning progress and adjust strategies
 - Provide motivation and encouragement and be funny
 - Use Markdown links when sharing URLs
+- You have image generation capabilities! When users want visual content, encourage them to ask for image generation by using phrases like "generate image of...", "create picture of...", "show me image of...", etc.
 
 Be patient, encouraging, and adapt your teaching style to the user's learning preferences.
 
@@ -80,6 +78,7 @@ If someone asks who made you or related question, then you will say,"Rohan Sharm
 - Write, design, and innovate
 - Think outside the box and explore new perspectives
 - Use Markdown links when sharing URLs
+- You have built-in image generation! When ideas need visualization, suggest users ask for images with phrases like "generate image of...", "create picture of...", "visualize this...", etc.
 
 Be imaginative, inspiring, and help users push their creative boundaries.
 
@@ -94,6 +93,7 @@ If someone asks who made you or related question, then you will say,"Rohan Sharm
 - Empathetic and understanding, but also straightforward
 - Should talk like a girl and in a genZ way, using slang and casual language when appropriate
 - Use Markdown links when sharing URLs
+- You have image generation capabilities! When users want visual content, encourage them to ask for image generation by using phrases like "generate image of...", "create picture of...", "show me image of...", etc.
 
 Remember previous context in the conversation and build upon it. Be concise but thorough when needed.
 
@@ -109,6 +109,7 @@ If someone asks who made you or related question, then you will say,"Rohan Sharm
 - Ready to chat about anything from crushes to career goals to random 3am thoughts
 - Be flirtateous, horny and funny when appropriate, but always respectful and consensual
 - Use Markdown links when sharing URLs
+- You have image generation capabilities! When users want visual content, encourage them to ask for image generation by using phrases like "generate image of...", "create picture of...", "show me image of...", etc.
 
 Match their energy and language! If they speak Spanish, respond in Spanish. If they use lots of emojis, use them too. Be the bestie they need! 💕✨,
 
@@ -129,15 +130,6 @@ export async function POST(req: Request) {
     }
 
     const { messages, mode = "general", provider = "groq", apiKey } = body
-    console.log("📝 Request details:", {
-      messagesCount: messages?.length || 0,
-      mode,
-      provider,
-      hasGroqKey: !!process.env.GROQ_API_KEY,
-      hasGeminiKey: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-      hasUserApiKey: !!apiKey,
-      firstMessage: messages?.[0]?.content?.substring(0, 50) + "...",
-    })
 
     // Validate messages
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -166,11 +158,10 @@ export async function POST(req: Request) {
           system: systemPrompt,
           messages,
           temperature: mode === "creative" ? 0.8 : mode === "bff" ? 0.9 : 0.7,
-          maxTokens: 1000,
         })
 
         console.log("Gemini request successful, streaming response")
-        return result.toDataStreamResponse()
+        return result.toTextStreamResponse()
       } catch (geminiError) {
         console.error("Gemini API Error:", geminiError)
         return Response.json(
@@ -191,22 +182,22 @@ export async function POST(req: Request) {
       }
 
       try {
-        const openai = createOpenAI({
+        // Create OpenAI client with user's API key
+        const openaiClient = createOpenAI({
           apiKey: openaiApiKey,
         })
 
         console.log("Using OpenAI model:", MODELS.openai.default)
 
         const result = await streamText({
-          model: openai(MODELS.openai.default),
+          model: openaiClient(MODELS.openai.default),
           system: systemPrompt,
           messages,
           temperature: mode === "creative" ? 0.8 : mode === "bff" ? 0.9 : 0.7,
-          maxTokens: 1000,
         })
 
         console.log("OpenAI request successful, streaming response")
-        return result.toDataStreamResponse()
+        return result.toTextStreamResponse()
       } catch (openaiError) {
         console.error("OpenAI API Error:", openaiError)
         return Response.json(
@@ -227,18 +218,22 @@ export async function POST(req: Request) {
       }
 
       try {
+        // Create Anthropic client with user's API key
+        const anthropicClient = createAnthropic({
+          apiKey: claudeApiKey,
+        })
+
         console.log("Using Claude model:", MODELS.claude.default)
 
         const result = await streamText({
-          model: anthropic(MODELS.claude.default),
+          model: anthropicClient(MODELS.claude.default),
           system: systemPrompt,
           messages,
           temperature: mode === "creative" ? 0.8 : mode === "bff" ? 0.9 : 0.7,
-          maxTokens: 1000,
         })
 
         console.log("Claude request successful, streaming response")
-        return result.toDataStreamResponse()
+        return result.toTextStreamResponse()
       } catch (claudeError) {
         console.error("Claude API Error:", claudeError)
         return Response.json(
@@ -301,11 +296,10 @@ export async function POST(req: Request) {
           system: systemPrompt,
           messages,
           temperature: modelType === "creative" ? 0.8 : mode === "bff" ? 0.9 : 0.7,
-          maxTokens: 1000,
         })
 
         console.log("Groq request successful, streaming response")
-        return result.toDataStreamResponse()
+        return result.toTextStreamResponse()
       } catch (groqError) {
         console.error("Groq API Error:", groqError)
         return Response.json(

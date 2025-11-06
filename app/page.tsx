@@ -1,66 +1,45 @@
 "use client"
 
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { ChangeEvent, FormEvent } from "react"
 import { useChat } from "@ai-sdk/react"
-import { useState, useEffect, useRef, useCallback, useMemo } from "react"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import { Textarea } from "@/components/ui/textarea"
-import { Separator } from "@/components/ui/separator"
-import { Input } from "@/components/ui/input"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
+import type { Components } from "react-markdown"
+import { Analytics } from "@vercel/analytics/react"
+import { SpeedInsights } from "@vercel/speed-insights/next"
 import {
   Brain,
   Heart,
   BookOpen,
   Lightbulb,
-  User,
-  Target,
-  MessageCircle,
-  Trash2,
-  Mic,
-  MicOff,
-  ArrowUp,
-  Sparkles,
-  Github,
-  Menu,
-  X,
-  Volume2,
-  VolumeX,
   Users,
-  Sun,
-  Moon,
-  Cpu,
-  AlertCircle,
-  ChevronDown,
-  Key,
-  Check,
-  Gamepad2,
-  Palette,
+  Target,
 } from "lucide-react"
-import ReactMarkdown from "react-markdown"
-import { AIVisualization } from "@/components/ai-visualization"
+
+import { ChatAppShell } from "@/components/chat/app-shell"
+import { SidebarNav } from "@/components/chat/sidebar-nav"
+import { ChatTopbar } from "@/components/chat/topbar"
+import { ChatFeed } from "@/components/chat/chat-feed"
+import { ChatComposer } from "@/components/chat/chat-composer"
+import { SidebarDrawer } from "@/components/chat/sidebar-drawer"
+import { InsightsPanel } from "@/components/chat/insights-panel"
 import { ActivityMatrix } from "@/components/activity-matrix"
+import { ApiKeyDialog } from "@/components/dialog/api-key-dialog"
+import { SettingsDialog } from "@/components/dialog/settings-dialog"
+import { ImageSettingsDialog } from "@/components/dialog/image-settings-dialog"
+import { CodeBlock } from "@/components/chat/code-block"
+import { GeneratedImage } from "@/components/chat/generated-image"
 import { useSpeech } from "@/hooks/use-speech"
-import "../styles/globals.css"
-import { Analytics } from "@vercel/analytics/react"
-import { SpeedInsights } from "@vercel/speed-insights/next"
 
-type Mode = "general" | "productivity" | "wellness" | "learning" | "creative" | "bff"
-type Provider = "groq" | "gemini" | "openai" | "claude"
-type UIStyle = "modern" | "pixel"
+import type { KeyProvider, KeyProviderMetadata, Mode, ModeDefinition, Provider, ProviderDefinition, UIStyle } from "@/types/chat"
+import type { ImageProviderId, ImageSettings } from "@/types/image"
+import { IMAGE_PROVIDERS, DEFAULT_IMAGE_PROVIDER } from "@/lib/image-providers"
+import { truncate } from "fs"
 
-const MODES = {
+const MODES: Record<Mode, ModeDefinition> = {
   general: {
     icon: Brain,
     label: "General",
-    description: "General assistance and conversation",
+    description: "Versatile assistance for everyday questions.",
     placeholder: "Ask me anything...",
     color: "text-cyan-600 dark:text-cyan-400",
     bg: "bg-cyan-100/50 dark:bg-cyan-950/30",
@@ -73,7 +52,7 @@ const MODES = {
   productivity: {
     icon: Target,
     label: "Productivity",
-    description: "Task management and organization",
+    description: "Structure goals, tasks, and workstreams with clarity.",
     placeholder: "How can I help you be more productive?",
     color: "text-emerald-600 dark:text-emerald-400",
     bg: "bg-emerald-100/50 dark:bg-emerald-950/30",
@@ -86,7 +65,7 @@ const MODES = {
   wellness: {
     icon: Heart,
     label: "Wellness",
-    description: "Health and well-being guidance",
+    description: "Support for habits, mindfulness, and wellbeing routines.",
     placeholder: "What wellness topic can I help with?",
     color: "text-rose-600 dark:text-rose-400",
     bg: "bg-rose-100/50 dark:bg-rose-950/30",
@@ -99,7 +78,7 @@ const MODES = {
   learning: {
     icon: BookOpen,
     label: "Learning",
-    description: "Education and skill development",
+    description: "Break down concepts and craft study plans with ease.",
     placeholder: "What would you like to learn?",
     color: "text-purple-600 dark:text-purple-400",
     bg: "bg-purple-100/50 dark:bg-purple-950/30",
@@ -112,7 +91,7 @@ const MODES = {
   creative: {
     icon: Lightbulb,
     label: "Creative",
-    description: "Ideas and creative projects",
+    description: "Generate ideas, stories, and fresh perspectives.",
     placeholder: "Let's brainstorm something creative...",
     color: "text-amber-600 dark:text-amber-400",
     bg: "bg-amber-100/50 dark:bg-amber-950/30",
@@ -125,8 +104,8 @@ const MODES = {
   bff: {
     icon: Users,
     label: "BFF",
-    description: "Your GenZ bestie who speaks your language",
-    placeholder: "Hey bestie, what's up? 💕",
+    description: "Gen Z bestie energy for playful, real talk exchanges.",
+    placeholder: "Hey bestie, what's up?",
     color: "text-pink-600 dark:text-pink-400",
     bg: "bg-pink-100/50 dark:bg-pink-950/30",
     bgPixel: "bg-pink-100 dark:bg-pink-900/30",
@@ -137,7 +116,7 @@ const MODES = {
   },
 }
 
-const PROVIDERS = {
+const PROVIDERS: Record<Provider, ProviderDefinition> = {
   groq: {
     name: "Groq",
     description: "Fast and efficient LLM",
@@ -148,41 +127,133 @@ const PROVIDERS = {
   gemini: {
     name: "Gemini",
     description: "Google's multimodal AI",
-    models: ["gemini-2.0-flash"],
+    models: ["gemini-2.5-flash"],
     requiresApiKey: false,
     color: "emerald",
   },
   openai: {
     name: "OpenAI",
     description: "Advanced language models",
-    models: ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
+    models: ["gpt-5", "gpt-4-turbo", "gpt-3.5-turbo"],
     requiresApiKey: true,
     color: "violet",
   },
   claude: {
     name: "Claude",
     description: "Anthropic's helpful assistant",
-    models: ["claude-3-opus", "claude-3-sonnet", "claude-3-haiku"],
+    models: ["claude-opus-4-1-20250805", "claude-opus-4-1", "claude-3-haiku"],
     requiresApiKey: true,
     color: "orange",
   },
 }
 
-const QUICK_ACTIONS = {
-  general: [
-    "Help me make a decision",
-    "Explain complex topic",
-    "Give advice on a situation",
-    "Solve a problem step by step",
-  ],
-  productivity: ["Plan my day effectively", "Break down a project", "Prioritize my tasks", "Time management tips"],
-  wellness: ["Morning routine ideas", "Stress management techniques", "Healthy habit suggestions", "Workout planning"],
-  learning: ["Explain a concept", "Create a study plan", "Learning resources", "Practice exercises"],
-  creative: ["Brainstorm ideas", "Creative writing prompts", "Project inspiration", "Overcome creative blocks"],
-  bff: ["What's the tea? ☕", "I need some motivation 💪", "Help me with drama 🎭", "Let's chat about life 💫"],
+const KEY_PROVIDER_METADATA: Record<KeyProvider, KeyProviderMetadata> = {
+  groq: {
+    name: PROVIDERS.groq.name,
+    description: PROVIDERS.groq.description,
+  },
+  gemini: {
+    name: PROVIDERS.gemini.name,
+    description: PROVIDERS.gemini.description,
+  },
+  openai: {
+    name: PROVIDERS.openai.name,
+    description: PROVIDERS.openai.description,
+  },
+  claude: {
+    name: PROVIDERS.claude.name,
+    description: PROVIDERS.claude.description,
+  },
+  huggingface: {
+    name: "Hugging Face",
+    description: "Image generation with FLUX.1 Schnell and Stable Diffusion XL models",
+  },
 }
 
-import type { Components } from "react-markdown"
+const QUICK_ACTIONS: Record<Mode, string[]> = {
+  general: ["Help me make a decision", "Explain a complex topic", "Give advice on a situation", "Guide me step by step"],
+  productivity: ["Plan my day effectively", "Break down a project", "Prioritize my tasks", "Time management tips"],
+  wellness: ["Morning routine ideas", "Stress management techniques", "Healthy habit suggestions", "Workout planning"],
+  learning: ["Explain a concept", "Create a study plan", "Recommend resources", "Give practice exercises"],
+  creative: ["Brainstorm new ideas", "Generate creative prompts", "Outline a project", "Help me overcome a block"],
+  bff: ["What's the tea?", "I need motivation", "Help me with drama", "Let's chat about life"],
+}
+
+type MessagesByMode = Record<Mode, any[]>
+
+type ApiKeyMap = {
+  openai: string
+  claude: string
+  huggingface: string
+}
+
+const IMAGE_SETTINGS_STORAGE_KEY = "radhika-image-settings"
+const LEGACY_IMAGE_PROVIDER_KEYS_STORAGE_KEY = "radhika-image-provider-keys"
+
+const createDefaultImageSettings = (providerId: ImageProviderId = DEFAULT_IMAGE_PROVIDER): ImageSettings => {
+  const providerMeta = IMAGE_PROVIDERS[providerId]
+  const firstSize = providerMeta.sizes[0]
+
+  return {
+    provider: providerMeta.id,
+    model: providerMeta.defaultModel ?? providerMeta.models?.[0]?.id,
+    size: firstSize ? firstSize.id : "custom",
+    customWidth: firstSize?.width ?? 1024,
+    customHeight: firstSize?.height ?? 1024,
+    style: "none",
+    customStyle: "",
+    customPrompt: "",
+  }
+}
+
+const sanitizeImageSettings = (raw: Partial<ImageSettings> | null | undefined): ImageSettings => {
+  const providerId: ImageProviderId = raw?.provider && raw.provider in IMAGE_PROVIDERS
+    ? (raw.provider as ImageProviderId)
+    : DEFAULT_IMAGE_PROVIDER
+
+  const providerMeta = IMAGE_PROVIDERS[providerId]
+  const base = createDefaultImageSettings(providerId)
+
+  let size = base.size
+  if (raw?.size === "custom") {
+    size = "custom"
+  } else if (raw?.size && providerMeta.sizes.some((option) => option.id === raw.size)) {
+    size = raw.size
+  }
+
+  let customWidth = base.customWidth
+  let customHeight = base.customHeight
+  if (size === "custom") {
+    if (typeof raw?.customWidth === "number" && Number.isFinite(raw.customWidth)) {
+      customWidth = raw.customWidth
+    }
+    if (typeof raw?.customHeight === "number" && Number.isFinite(raw.customHeight)) {
+      customHeight = raw.customHeight
+    }
+  } else {
+    const preset = providerMeta.sizes.find((option) => option.id === size)
+    if (preset) {
+      customWidth = preset.width
+      customHeight = preset.height
+    }
+  }
+
+  let model = base.model
+  if (raw?.model && providerMeta.models?.some((option) => option.id === raw.model)) {
+    model = raw.model
+  }
+
+  return {
+    provider: providerId,
+    model,
+    size,
+    customWidth,
+    customHeight,
+    style: raw?.style ?? base.style,
+    customStyle: raw?.customStyle ?? "",
+    customPrompt: raw?.customPrompt ?? "",
+  }
+}
 
 export default function FuturisticRadhika() {
   const [mode, setMode] = useState<Mode>("general")
@@ -190,152 +261,26 @@ export default function FuturisticRadhika() {
   const [darkMode, setDarkMode] = useState(false)
   const [uiStyle, setUIStyle] = useState<UIStyle>("modern")
   const [error, setError] = useState<string | null>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [navigationOpen, setNavigationOpen] = useState(false)
+  const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false)
   const [isApiKeyDialogOpen, setIsApiKeyDialogOpen] = useState(false)
-  const [selectedProvider, setSelectedProvider] = useState<Provider>("groq")
+  const [selectedProvider, setSelectedProvider] = useState<KeyProvider>("groq")
   const [tempApiKey, setTempApiKey] = useState("")
-  const [isProviderMenuOpen, setIsProviderMenuOpen] = useState(false)
 
-  // Dynamic Markdown Components based on UI style
-  const MarkdownComponents: Components = useMemo(
-    () => ({
-      h1: ({ children }) => (
-        <h1
-          className={`text-base lg:text-lg mb-2 lg:mb-3 text-gray-900 dark:text-gray-100 ${uiStyle === "pixel" ? "text-xs lg:text-sm font-bold pixel-font" : "font-semibold"}`}
-        >
-          {children}
-        </h1>
-      ),
-      h2: ({ children }) => (
-        <h2
-          className={`text-sm lg:text-base mb-1.5 lg:mb-2 text-gray-900 dark:text-gray-100 ${uiStyle === "pixel" ? "text-xs lg:text-xs font-bold pixel-font" : "font-semibold"}`}
-        >
-          {children}
-        </h2>
-      ),
-      h3: ({ children }) => (
-        <h3
-          className={`text-xs lg:text-sm mb-1.5 lg:mb-2 text-gray-900 dark:text-gray-100 ${uiStyle === "pixel" ? "text-xs lg:text-xs font-bold pixel-font" : "font-semibold"}`}
-        >
-          {children}
-        </h3>
-      ),
-      p: ({ children }) => (
-        <p
-          className={`mb-2 lg:mb-3 last:mb-0 text-sm lg:text-base text-gray-700 dark:text-gray-300 leading-relaxed ${uiStyle === "pixel" ? "text-xs lg:text-xs pixel-font" : ""}`}
-        >
-          {children}
-        </p>
-      ),
-      ul: ({ children }) => (
-        <ul
-          className={`mb-2 lg:mb-3 space-y-1 text-sm lg:text-base text-gray-700 dark:text-gray-300 ${uiStyle === "pixel" ? "list-none text-xs lg:text-xs pixel-font" : "list-disc list-inside"}`}
-        >
-          {children}
-        </ul>
-      ),
-      ol: ({ children }) => (
-        <ol
-          className={`mb-2 lg:mb-3 space-y-1 text-sm lg:text-base text-gray-700 dark:text-gray-300 ${uiStyle === "pixel" ? "list-none text-xs lg:text-xs pixel-font" : "list-decimal list-inside"}`}
-        >
-          {children}
-        </ol>
-      ),
-      li: ({ children }) => (
-        <li
-          className={`text-sm lg:text-base text-gray-700 dark:text-gray-300 ${uiStyle === "pixel" ? 'text-xs lg:text-xs pixel-font before:content-["▶_"] before:text-cyan-600 dark:before:text-cyan-400' : ""}`}
-        >
-          {children}
-        </li>
-      ),
-      strong: ({ children }) => (
-        <strong
-          className={`text-gray-900 dark:text-gray-100 ${uiStyle === "pixel" ? "font-bold pixel-font" : "font-semibold"}`}
-        >
-          {children}
-        </strong>
-      ),
-      em: ({ children }) => (
-        <em className={`italic text-gray-700 dark:text-gray-300 ${uiStyle === "pixel" ? "pixel-font" : ""}`}>
-          {children}
-        </em>
-      ),
-      code: ({ children, className }) => {
-        const isInline = !className?.includes("language-")
-        return isInline ? (
-          <code
-            className={`px-1.5 py-0.5 text-xs lg:text-sm font-mono text-cyan-700 dark:text-cyan-400 ${uiStyle === "pixel"
-              ? "bg-gray-300 dark:bg-gray-800 border-2 border-gray-400 dark:border-gray-600 pixel-border pixel-font px-2 py-1 text-gray-900 dark:text-gray-100"
-              : "bg-gray-200 dark:bg-gray-800 rounded border border-gray-300 dark:border-gray-700"
-              }`}
-          >
-            {children}
-          </code>
-        ) : (
-          <code
-            className={`block p-2 lg:p-3 text-xs lg:text-sm font-mono overflow-x-auto ${uiStyle === "pixel"
-              ? "bg-gray-200 dark:bg-gray-900 text-gray-900 dark:text-gray-100 border-2 border-gray-400 dark:border-gray-600 pixel-border"
-              : "bg-gray-200 dark:bg-gray-900 rounded-lg text-gray-800 dark:text-gray-200 border border-gray-300 dark:border-gray-700"
-              }`}
-          >
-            {children}
-          </code>
-        )
-      },
-      pre: ({ children }) => (
-        <pre
-          className={`p-2 lg:p-3 mb-2 lg:mb-3 overflow-x-auto ${uiStyle === "pixel"
-            ? "bg-gray-200 dark:bg-gray-900 border-2 border-gray-400 dark:border-gray-600 pixel-border"
-            : "bg-gray-200 dark:bg-gray-900 rounded-lg border border-gray-300 dark:border-gray-700"
-            }`}
-        >
-          {children}
-        </pre>
-      ),
-      blockquote: ({ children, ...props }) => (
-        <blockquote
-          {...props}
-          className={`border-l-4 border-cyan-500 pl-3 lg:pl-4 italic mb-2 lg:mb-3 text-sm lg:text-base text-gray-600 dark:text-gray-400 ${uiStyle === "pixel" ? "pixel-font border-cyan-600 dark:border-cyan-400" : ""}`}
-        >
-          {children}
-        </blockquote>
-      ),
-      a: ({ href, children }) => (
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`text-cyan-600 dark:text-cyan-400 hover:text-cyan-500 dark:hover:text-cyan-300 underline ${uiStyle === "pixel" ? "pixel-font" : ""}`}
-        >
-          {children}
-        </a>
-      ),
-    }),
-    [uiStyle],
-  )
+  const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false)
+  const [isImageSettingsDialogOpen, setIsImageSettingsDialogOpen] = useState(false)
+  const [imageSettings, setImageSettings] = useState<ImageSettings>(() => createDefaultImageSettings())
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false)
+  const [isChatLoading, setIsChatLoading] = useState(false)
 
-  // Use the speech hook
-  const {
-    isListening,
-    isSpeaking,
-    voiceEnabled,
-    error: speechError,
-    setVoiceEnabled,
-    speakMessage,
-    stopSpeaking,
-    startListening,
-    clearError: clearSpeechError,
-  } = useSpeech()
-
-  // Stable API keys state
-  const [apiKeys, setApiKeys] = useState(() => ({
+  const [apiKeys, setApiKeys] = useState<ApiKeyMap>(() => ({
     openai: "",
     claude: "",
+    huggingface: "",
   }))
 
-  // Separate message states for each mode - use ref to avoid dependency issues
-  const messagesByModeRef = useRef<Record<Mode, any[]>>({
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesByModeRef = useRef<MessagesByMode>({
     general: [],
     productivity: [],
     wellness: [],
@@ -343,65 +288,116 @@ export default function FuturisticRadhika() {
     creative: [],
     bff: [],
   })
-
-  // Current mode ref to avoid stale closures
   const currentModeRef = useRef<Mode>(mode)
   currentModeRef.current = mode
 
-  // Memoize the current API key to prevent unnecessary re-renders
+  const {
+    isListening,
+    isSpeaking,
+    voiceEnabled,
+    setVoiceEnabled,
+    speakMessage,
+    stopSpeaking,
+    startListening,
+    error: speechError,
+    clearError: clearSpeechError,
+  } = useSpeech()
+
   const currentApiKey = useMemo(() => {
     if (!PROVIDERS[provider].requiresApiKey) return ""
-    return provider === "openai" ? apiKeys.openai : provider === "claude" ? apiKeys.claude : ""
+    if (provider === "openai") return apiKeys.openai
+    if (provider === "claude") return apiKeys.claude
+    return ""
   }, [provider, apiKeys])
 
-  // Stable chat configuration - memoized to prevent infinite loops
   const chatConfig = useMemo(
     () => ({
       api: "/api/chat",
-      experimental_throttle: 50, // Throttle UI updates to prevent infinite loops
       body: {
         mode,
         provider,
-        ...(PROVIDERS[provider].requiresApiKey && provider === "openai" && apiKeys.openai
-          ? { apiKey: apiKeys.openai }
-          : provider === "claude" && apiKeys.claude
-            ? { apiKey: apiKeys.claude }
-            : {}),
+        ...(currentApiKey ? { apiKey: currentApiKey } : {}),
       },
-      onError: (error: Error) => {
-        console.error("Chat error details:", error)
-        const errorMessage = error.message || "Failed to send message. Please try again."
-        setError(errorMessage)
-
-        // If it's an API key error, suggest setting up the API key
-        if (errorMessage.includes("API configuration error") || errorMessage.includes("API key")) {
-          setError(`${errorMessage} Please set up your ${PROVIDERS[provider].name} API key.`)
-        }
+      onError: (incomingError: Error) => {
+        console.error("Chat error details:", incomingError)
+        const message = incomingError.message || "Failed to send message. Please try again."
+        setError(
+          message.includes("API") || message.includes("key")
+            ? `${message} Please configure your ${PROVIDERS[provider].name} API key.`
+            : message,
+        )
       },
       onFinish: (message: any) => {
         setError(null)
-        if (voiceEnabled && message.content) {
+        if (voiceEnabled && message?.content) {
           speakMessage(message.content)
         }
       },
     }),
-    [mode, provider, apiKeys.openai, apiKeys.claude, voiceEnabled, speakMessage],
+    [mode, provider, currentApiKey, voiceEnabled, speakMessage],
   )
 
-  const { messages, input, handleInputChange, handleSubmit, isLoading, setMessages, setInput } = useChat(chatConfig)
-
-  // Update messages by mode when messages change - use useCallback to prevent infinite loops
-  const updateMessagesByMode = useCallback(() => {
-    if (messages.length > 0) {
-      messagesByModeRef.current[currentModeRef.current] = [...messages]
+  const chatHelpers: any = useChat(chatConfig)
+  
+  // Fallback state for input if useChat doesn't provide it
+  const [localInput, setLocalInput] = useState("")
+  
+  // Extract core values from chatHelpers
+  const messages = chatHelpers.messages ?? []
+  const setMessages = chatHelpers.setMessages ?? (() => {})
+  const isLoading = chatHelpers.isLoading ?? isChatLoading
+  const input = chatHelpers.input !== undefined ? chatHelpers.input : localInput
+  const append = chatHelpers.append ?? null
+  const reload = chatHelpers.reload ?? null
+  
+  // Store the original handlers in refs to avoid dependency issues
+  const handleInputChangeRef = useRef(chatHelpers.handleInputChange)
+  const setInputRef = useRef(chatHelpers.setInput)
+  const handleSubmitRef = useRef(chatHelpers.handleSubmit)
+  const appendRef = useRef(append)
+  
+  // Update refs when chatHelpers changes
+  useEffect(() => {
+    handleInputChangeRef.current = chatHelpers.handleInputChange
+    setInputRef.current = chatHelpers.setInput
+    handleSubmitRef.current = chatHelpers.handleSubmit
+    appendRef.current = chatHelpers.append
+  }, [chatHelpers])
+  
+  // Ensure handleInputChange always works
+  const handleInputChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value
+    if (handleInputChangeRef.current) {
+      handleInputChangeRef.current(e)
+    } else if (setInputRef.current) {
+      setInputRef.current(value)
+    } else {
+      setLocalInput(value)
     }
-  }, [messages])
+  }, [])
+  
+  // Ensure setInput always works
+  const setInput = useCallback((value: string) => {
+    if (setInputRef.current) {
+      setInputRef.current(value)
+    } else {
+      setLocalInput(value)
+    }
+  }, [])
+  
+  // Ensure handleSubmit always works - this is critical for messages to be sent
+  const handleSubmit = useCallback((e: FormEvent<HTMLFormElement>) => {
+    if (handleSubmitRef.current) {
+      handleSubmitRef.current(e)
+    } else {
+      e.preventDefault()
+    }
+  }, [])
 
   useEffect(() => {
-    updateMessagesByMode()
-  }, [updateMessagesByMode])
+    messagesByModeRef.current[currentModeRef.current] = [...messages]
+  }, [messages])
 
-  // Apply theme
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add("dark")
@@ -410,27 +406,92 @@ export default function FuturisticRadhika() {
     }
   }, [darkMode])
 
-  // Load API keys from localStorage
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window === "undefined") return
+
+    const nextKeys: ApiKeyMap = {
+      openai: "",
+      claude: "",
+      huggingface: "",
+    }
+
+    try {
       const savedApiKeys = localStorage.getItem("radhika-api-keys")
       if (savedApiKeys) {
-        try {
-          const parsedKeys = JSON.parse(savedApiKeys)
-          setApiKeys(parsedKeys)
-        } catch (e) {
-          console.error("Failed to parse saved API keys:", e)
+        const parsed = JSON.parse(savedApiKeys) as Partial<ApiKeyMap>
+        if (parsed && typeof parsed === "object") {
+          if (typeof parsed.openai === "string") {
+            nextKeys.openai = parsed.openai
+          }
+          if (typeof parsed.claude === "string") {
+            nextKeys.claude = parsed.claude
+          }
+          if (typeof parsed.huggingface === "string") {
+            nextKeys.huggingface = parsed.huggingface
+          }
         }
       }
+    } catch (parseError) {
+      console.error("Failed to parse saved API keys", parseError)
     }
+
+    try {
+      if (!nextKeys.huggingface) {
+        const legacyKeys = localStorage.getItem(LEGACY_IMAGE_PROVIDER_KEYS_STORAGE_KEY)
+        if (legacyKeys) {
+          const parsedLegacy = JSON.parse(legacyKeys) as Record<string, unknown>
+          const legacyHuggingface = parsedLegacy?.huggingface
+          if (typeof legacyHuggingface === "string" && legacyHuggingface.trim()) {
+            nextKeys.huggingface = legacyHuggingface.trim()
+          }
+        }
+      }
+    } catch (parseError) {
+      console.error("Failed to parse legacy image provider keys", parseError)
+    }
+
+    setApiKeys(nextKeys)
+    localStorage.setItem("radhika-api-keys", JSON.stringify(nextKeys))
+    localStorage.removeItem(LEGACY_IMAGE_PROVIDER_KEYS_STORAGE_KEY)
   }, [])
 
-  // Combine errors
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const savedSettings = localStorage.getItem(IMAGE_SETTINGS_STORAGE_KEY)
+    if (savedSettings) {
+      try {
+        const parsed = JSON.parse(savedSettings) as { enabled?: boolean; settings?: Partial<ImageSettings> }
+        if (typeof parsed.enabled === "boolean") {
+          setImageGenerationEnabled(parsed.enabled)
+        }
+        if (parsed.settings) {
+          setImageSettings(sanitizeImageSettings(parsed.settings))
+        }
+      } catch (parseError) {
+        console.error("Failed to parse saved image settings", parseError)
+      }
+    }
+
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    localStorage.setItem(
+      IMAGE_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ enabled: imageGenerationEnabled, settings: imageSettings }),
+    )
+  }, [imageGenerationEnabled, imageSettings])
   const combinedError = error || speechError
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+    // Use requestAnimationFrame to prevent infinite loops during streaming
+    const timeoutId = setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    }, 100)
+    
+    return () => clearTimeout(timeoutId)
+  }, [messages.length])
 
   const handleQuickAction = useCallback(
     (action: string) => {
@@ -455,908 +516,866 @@ export default function FuturisticRadhika() {
     })
   }, [startListening, setInput])
 
-  // Handle mode change - load messages for the new mode
   const handleModeChange = useCallback(
-    (newMode: Mode) => {
-      if (newMode === mode) return // Don't update if mode hasn't changed
-
-      // Save current messages to current mode
+    (nextMode: Mode) => {
+      if (nextMode === mode) return
       messagesByModeRef.current[currentModeRef.current] = [...messages]
-
-      // Switch to new mode
-      setMode(newMode)
+      setMode(nextMode)
       setError(null)
       clearSpeechError()
-      setIsMobileMenuOpen(false)
-
-      // Set messages for new mode
-      const newModeMessages = messagesByModeRef.current[newMode] || []
-      setMessages(newModeMessages)
+      setNavigationOpen(false)
+      const nextMessages = messagesByModeRef.current[nextMode] || []
+      setMessages(nextMessages)
     },
-    [messages, setMessages, mode, clearSpeechError],
+    [mode, messages, setMessages, clearSpeechError],
   )
 
-  // Handle provider change
   const handleProviderChange = useCallback(
-    (newProvider: Provider) => {
-      // Close the provider menu
-      setIsProviderMenuOpen(false)
+    (nextProvider: Provider) => {
+      if (PROVIDERS[nextProvider].requiresApiKey) {
+        const hasKey =
+          nextProvider === "openai"
+            ? Boolean(apiKeys.openai)
+            : nextProvider === "claude"
+              ? Boolean(apiKeys.claude)
+              : true
 
-      // Check if API key is required and available
-      if (PROVIDERS[newProvider].requiresApiKey) {
-        const hasApiKey = newProvider === "openai" ? apiKeys.openai : newProvider === "claude" ? apiKeys.claude : false
-        if (!hasApiKey) {
-          setSelectedProvider(newProvider)
+        if (!hasKey) {
+          setSelectedProvider(nextProvider)
           setTempApiKey("")
           setIsApiKeyDialogOpen(true)
           return
         }
       }
 
-      setProvider(newProvider)
+      setProvider(nextProvider)
       setError(null)
       clearSpeechError()
     },
     [apiKeys, clearSpeechError],
   )
 
-  // Handle API key save
   const handleSaveApiKey = useCallback(() => {
     if (!tempApiKey.trim()) {
       setIsApiKeyDialogOpen(false)
       return
     }
 
-    // Update API keys
-    const updatedApiKeys = {
+    if (selectedProvider !== "openai" && selectedProvider !== "claude" && selectedProvider !== "huggingface") {
+      setIsApiKeyDialogOpen(false)
+      return
+    }
+
+    const updatedKeys: ApiKeyMap = {
       ...apiKeys,
       [selectedProvider]: tempApiKey.trim(),
     }
-    setApiKeys(updatedApiKeys)
 
-    // Save API keys to localStorage
-    localStorage.setItem("radhika-api-keys", JSON.stringify(updatedApiKeys))
+    setApiKeys(updatedKeys)
+    localStorage.setItem("radhika-api-keys", JSON.stringify(updatedKeys))
 
-    // Switch to the selected provider
-    setProvider(selectedProvider)
+    if (selectedProvider === "openai" || selectedProvider === "claude") {
+      setProvider(selectedProvider)
+    }
     setError(null)
     clearSpeechError()
     setIsApiKeyDialogOpen(false)
     setTempApiKey("")
   }, [apiKeys, selectedProvider, tempApiKey, clearSpeechError])
 
+  const handleRemoveApiKey = useCallback(() => {
+    if (selectedProvider !== "openai" && selectedProvider !== "claude" && selectedProvider !== "huggingface") {
+      setIsApiKeyDialogOpen(false)
+      return
+    }
+
+    const updatedKeys: ApiKeyMap = {
+      ...apiKeys,
+      [selectedProvider]: "",
+    }
+
+    setApiKeys(updatedKeys)
+    localStorage.setItem("radhika-api-keys", JSON.stringify(updatedKeys))
+
+    // Switch back to groq if removing the current provider's key
+    if (selectedProvider === provider) {
+      setProvider("groq")
+    }
+
+    setError(null)
+    clearSpeechError()
+    setIsApiKeyDialogOpen(false)
+    setTempApiKey("")
+  }, [apiKeys, selectedProvider, provider, clearSpeechError])
+
+  const handleApiDialogChange = useCallback((open: boolean) => {
+    setIsApiKeyDialogOpen(open)
+    if (!open) {
+      setTempApiKey("")
+    }
+  }, [])
+
+  const handleOpenSettings = useCallback(() => {
+    setIsSettingsDialogOpen(true)
+  }, [])
+
+  const handleManageProvider = useCallback((providerKey: KeyProvider) => {
+    setSelectedProvider(providerKey)
+    setTempApiKey("")
+    setIsApiKeyDialogOpen(true)
+  }, [])
+
+  const promptForProviderKey = useCallback(
+    (providerId: ImageProviderId) => {
+      if (providerId === "openai") {
+        setSelectedProvider("openai")
+        setTempApiKey("")
+        setIsApiKeyDialogOpen(true)
+        return
+      }
+
+      if (providerId === "huggingface") {
+        setSelectedProvider("huggingface")
+        setTempApiKey("")
+        setIsApiKeyDialogOpen(true)
+      }
+    },
+    [],
+  )
+
+  const ensureProviderKey = useCallback(
+    (providerId: ImageProviderId) => {
+      if (providerId === "pollinations_free" || providerId === "free_alternatives") { //|| providerId === "gemini"
+        return true
+      }
+
+      if (providerId === "openai") {
+        return Boolean(apiKeys.openai)
+      }
+
+      if (providerId === "huggingface") {
+        return Boolean(apiKeys.huggingface)
+      }
+
+      return true
+    },
+    [apiKeys.openai, apiKeys.huggingface],
+  )
+
+  const handleToggleImageGeneration = useCallback(
+    (enabled: boolean) => {
+      if (enabled) {
+        if (!ensureProviderKey(imageSettings.provider)) {
+          promptForProviderKey(imageSettings.provider)
+          return
+        }
+      }
+
+      setImageGenerationEnabled(enabled)
+    },
+    [ensureProviderKey, imageSettings.provider, promptForProviderKey],
+  )
+
+  const handleOpenImageGenerationSettings = useCallback(() => {
+    if (!ensureProviderKey(imageSettings.provider)) {
+      promptForProviderKey(imageSettings.provider)
+      return
+    }
+
+    setIsImageSettingsDialogOpen(true)
+  }, [ensureProviderKey, imageSettings.provider, promptForProviderKey])
+
+  const handleImageSettingsSave = useCallback((updatedSettings: ImageSettings) => {
+    setImageSettings({
+      ...updatedSettings,
+      customPrompt: updatedSettings.customPrompt.trim(),
+      customStyle: updatedSettings.customStyle?.trim() ?? "",
+    })
+    setIsImageSettingsDialogOpen(false)
+  }, [])
+
+  const handleComposerSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      
+      const promptText = input.trim()
+      if (!promptText) {
+        return
+      }
+
+      // Prevent duplicate submissions
+      if (isChatLoading || isGeneratingImage) {
+        console.log('Already processing, skipping duplicate submission')
+        return
+      }
+
+      // Auto-detect image generation keywords and patterns
+      const lowerPrompt = promptText.toLowerCase()
+      
+      // Direct action keywords
+      const actionKeywords = [
+        'generate image',
+        'create image',
+        'make image',
+        'draw',
+        'generate picture',
+        'create picture',
+        'make picture',
+        'generate photo',
+        'create photo',
+        'make photo',
+        'show me image',
+        'show me picture',
+        'show me photo',
+        'visualize',
+        'illustrate',
+        'design image',
+        'produce image',
+        'render image',
+        'paint',
+        'sketch'
+      ]
+      
+      // Descriptive patterns that indicate image generation intent
+      const descriptivePatterns = [
+        /image of (a|an|the|it|that|this)/i,
+        /picture of (a|an|the|it|that|this)/i,
+        /photo of (a|an|the|it|that|this)/i,
+        /\[image:/i,  // Markdown-style image descriptions
+        /(draw|paint|create|generate|make|show|visualize).*(image|picture|photo|art)/i,
+        // Contextual references - when user refers to something previously discussed
+        /(generate|create|make|show|draw|paint).+(it|that|this)/i,
+        /(image|picture|photo).+(it|that|this)/i,
+      ]
+      
+      const hasActionKeyword = actionKeywords.some(keyword => lowerPrompt.includes(keyword))
+      const hasDescriptivePattern = descriptivePatterns.some(pattern => pattern.test(promptText))
+      
+      const shouldAutoGenerateImage = hasActionKeyword || hasDescriptivePattern
+
+      // Create user message
+      const userMessage = {
+        id: `user-${Date.now()}`,
+        role: 'user' as const,
+        content: promptText,
+      }
+
+      // Clear the input first
+      setInput("")
+
+      // Add user message to chat
+      setMessages((prev: any) => [...prev, userMessage])
+
+      // Determine if we should generate an image
+      const willGenerateImage = imageGenerationEnabled || shouldAutoGenerateImage
+
+      // If image generation is enabled or auto-detected, skip chatbot response
+      if (willGenerateImage) {
+        // Continue to image generation below
+      } else {
+        // Send to API and get chatbot response
+        // Pass the userMessage so the function knows about it
+        sendChatMessage(userMessage)
+      }
+
+      if (!willGenerateImage) {
+        return
+      }
+
+      // Continue with image generation flow
+
+      const providerMeta = IMAGE_PROVIDERS[imageSettings.provider]
+      const placeholderId = `image-${Date.now()}-${Math.random().toString(16).slice(2)}`
+      const providerKey = imageSettings.provider === "openai"
+        ? apiKeys.openai
+        : imageSettings.provider === "huggingface"
+          ? apiKeys.huggingface
+          : ""
+
+      setIsGeneratingImage(true)
+      setMessages((prev: any) => [
+        ...prev,
+        {
+          id: placeholderId,
+          role: "assistant",
+          content: "_Generating image..._",
+        } as any,
+      ])
+
+      if (providerMeta.requiresKey && !providerKey) {
+        if (imageSettings.provider === "openai" || imageSettings.provider === "huggingface") {
+          promptForProviderKey(imageSettings.provider)
+        }
+        setMessages((prev: any) =>
+          prev.map((message: any) =>
+            message.id === placeholderId
+              ? {
+                  ...message,
+                  content: `Image generation requires an API key for ${providerMeta.name}. Update Image Settings to continue.`,
+                }
+              : message,
+          ),
+        )
+        setIsGeneratingImage(false)
+        return
+      }
+
+      const chosenModel =
+        imageSettings.model || providerMeta.defaultModel || providerMeta.models?.[0]?.id
+
+      const promptTemplate = imageSettings.customPrompt.trim()
+      let promptPayload = promptText
+      if (promptTemplate) {
+        promptPayload = promptTemplate.includes("{input}")
+          ? promptTemplate.split("{input}").join(promptText)
+          : `${promptTemplate}. ${promptText}`
+      }
+
+      const customStyle = (imageSettings.customStyle ?? "").trim()
+
+      const requestBody: Record<string, unknown> = {
+        provider: imageSettings.provider,
+        prompt: promptPayload,
+        content: promptText,
+        title: MODES[mode].label,
+        size: imageSettings.size,
+        model: chosenModel,
+        style: imageSettings.style,
+      }
+
+      if (imageSettings.size === "custom") {
+        requestBody.customWidth = imageSettings.customWidth
+        requestBody.customHeight = imageSettings.customHeight
+      }
+
+      if (imageSettings.style === "custom" && customStyle) {
+        requestBody.customStyle = customStyle
+      }
+
+      if (providerKey) {
+        requestBody.apiKey = providerKey
+      }
+
+      try {
+        const response = await fetch("/api/image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(requestBody),
+        })
+
+        const data = await response.json().catch(() => ({}))
+
+        if (!response.ok || !data?.success) {
+          throw new Error(data?.error || "Image generation failed")
+        }
+
+        const markdown = `![Generated image](${data.imageUrl})\n\n*${data.provider} · ${data.model} · ${data.size}*\n\n**Prompt:** ${data.prompt}`
+
+        setMessages((prev: any) =>
+          prev.map((message: any) => (message.id === placeholderId ? { ...message, content: markdown } : message)),
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Image generation failed"
+        setMessages((prev: any) =>
+          prev.map((entry: any) =>
+            entry.id === placeholderId
+              ? { ...entry, content: `Image generation failed: ${message}` }
+              : entry,
+          ),
+        )
+      } finally {
+        setIsGeneratingImage(false)
+      }
+    },
+    [
+      apiKeys.openai,
+      apiKeys.huggingface,
+      imageGenerationEnabled,
+      imageSettings,
+      input,
+      mode,
+      setInput,
+      setMessages,
+      messages,
+      provider,
+      currentApiKey,
+      isChatLoading,
+      isGeneratingImage,
+    ],
+  )
+
+  // Helper function to send chat message and handle streaming
+  const sendChatMessage = useCallback(async (userMessage: any) => {
+    // Prevent duplicate submissions
+    if (isChatLoading) {
+      console.log('Already loading, skipping duplicate request')
+      return
+    }
+    
+    setIsChatLoading(true)
+    
+    // Get current messages including the new user message
+    let currentMessages: any[] = []
+    setMessages((prev: any) => {
+      currentMessages = [...prev]
+      return prev
+    })
+    
+    // Ensure the user message is in the conversation
+    if (currentMessages.length === 0 || currentMessages[currentMessages.length - 1].id !== userMessage.id) {
+      currentMessages = [...currentMessages, userMessage]
+    }
+    
+    console.log('Sending messages to API:', {
+      count: currentMessages.length,
+      roles: currentMessages.map((m: any) => m.role),
+      lastMessage: currentMessages[currentMessages.length - 1]?.content?.substring(0, 50)
+    })
+    
+    const assistantMessageId = `assistant-${Date.now()}`
+    let accumulatedContent = ''
+    
+    try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            messages: currentMessages,
+            mode,
+            provider,
+            ...(currentApiKey ? { apiKey: currentApiKey } : {}),
+          }),
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}))
+          throw new Error(errorData.error || `Failed to get response: ${response.status}`)
+        }
+
+        // Read the streaming response - AI SDK uses text/plain streaming
+        const reader = response.body?.getReader()
+        const decoder = new TextDecoder()
+        
+        if (!reader) {
+          throw new Error('No response stream available')
+        }
+        
+        // Add empty assistant message placeholder
+        setMessages((prev: any) => [...prev, {
+          id: assistantMessageId,
+          role: 'assistant' as const,
+          content: '',
+        }])
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) {
+              console.log('✅ Stream complete, total content length:', accumulatedContent.length)
+              break
+            }
+            
+            const chunk = decoder.decode(value, { stream: true })
+            
+            // AI SDK toTextStreamResponse() returns plain text chunks
+            if (chunk) {
+              accumulatedContent += chunk
+              setMessages((prev: any) => 
+                prev.map((msg: any) => 
+                  msg.id === assistantMessageId ? { ...msg, content: accumulatedContent } : msg
+                )
+              )
+            }
+          }
+        } catch (streamError) {
+          console.error('❌ Stream error:', streamError)
+          // Remove empty assistant message on stream error
+          setMessages((prev: any) => prev.filter((msg: any) => msg.id !== assistantMessageId))
+          throw streamError
+        }
+        
+        // If no content was received, remove the empty message
+        if (!accumulatedContent || accumulatedContent.trim() === '') {
+          console.error('❌ No content received from stream')
+          setMessages((prev: any) => prev.filter((msg: any) => msg.id !== assistantMessageId))
+          throw new Error('No response received from AI')
+        }
+        
+        console.log('✅ Chat message completed successfully')
+    } catch (error) {
+      console.error('❌ Chat error:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      
+      // Add error message only if we don't already have an empty assistant message
+      setMessages((prev: any) => {
+        const hasEmptyAssistant = prev.some((msg: any) => msg.id === assistantMessageId && !msg.content)
+        if (hasEmptyAssistant) {
+          // Remove the empty assistant message
+          return prev.filter((msg: any) => msg.id !== assistantMessageId)
+        }
+        return [
+          ...prev,
+          {
+            id: `error-${Date.now()}`,
+            role: 'assistant' as const,
+            content: `Sorry, I encountered an error. Please try again.`,
+          },
+        ]
+      })
+    } finally {
+      setIsChatLoading(false)
+    }
+  }, [mode, provider, currentApiKey, setMessages])
+
   const currentMode = useMemo(() => MODES[mode], [mode])
-  const CurrentModeIcon = currentMode.icon
+  const providerLabel = useMemo(() => PROVIDERS[provider].name, [provider])
+  const imageSettingsLabel = useMemo(() => {
+    const providerMeta = IMAGE_PROVIDERS[imageSettings.provider]
+    const desiredModel = imageSettings.model || providerMeta.defaultModel
+    const modelLabel = providerMeta.models?.find((modelOption) => modelOption.id === desiredModel)?.label
+    return modelLabel ? `${providerMeta.name} · ${modelLabel}` : providerMeta.name
+  }, [imageSettings])
 
   const formatTime = useCallback((timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
   }, [])
 
-  // Close provider menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as HTMLElement
-      if (isProviderMenuOpen && !target.closest('[data-provider-menu="true"]')) {
-        setIsProviderMenuOpen(false)
+  const handleImageRetry = useCallback((messageId: string) => {
+    console.log("Retrying image generation for message:", messageId)
+    
+    // Find the message to retry
+    setMessages((prev: any) => {
+      const messageIndex = prev.findIndex((msg: any) => msg.id === messageId)
+      if (messageIndex === -1) return prev
+      
+      const message = prev[messageIndex]
+      
+      // Extract the prompt from the message content
+      const promptMatch = message.content.match(/\*\*Prompt:\*\*\s*(.+)$/)
+      const prompt = promptMatch ? promptMatch[1].trim() : ""
+      
+      if (!prompt) {
+        console.error("Could not extract prompt from message")
+        return prev
       }
-    }
+      
+      // Update the message to show "Regenerating..."
+      const updatedMessages = [...prev]
+      updatedMessages[messageIndex] = {
+        ...message,
+        content: "_Regenerating image..._",
+      }
+      
+      // Trigger image generation with the same prompt
+      setTimeout(() => {
+        void (async () => {
+          setIsGeneratingImage(true)
+          
+          const providerMeta = IMAGE_PROVIDERS[imageSettings.provider]
+          const providerKey = imageSettings.provider === "openai"
+            ? apiKeys.openai
+            : imageSettings.provider === "huggingface"
+              ? apiKeys.huggingface
+              : ""
+          
+          const chosenModel = imageSettings.model || providerMeta.defaultModel || providerMeta.models?.[0]?.id
+          const customStyle = (imageSettings.customStyle ?? "").trim()
+          
+          const requestBody: Record<string, unknown> = {
+            provider: imageSettings.provider,
+            prompt: prompt,
+            content: prompt,
+            title: MODES[mode].label,
+            size: imageSettings.size,
+            model: chosenModel,
+            style: imageSettings.style,
+          }
+          
+          if (imageSettings.size === "custom") {
+            requestBody.customWidth = imageSettings.customWidth
+            requestBody.customHeight = imageSettings.customHeight
+          }
+          
+          if (imageSettings.style === "custom" && customStyle) {
+            requestBody.customStyle = customStyle
+          }
+          
+          if (providerKey) {
+            requestBody.apiKey = providerKey
+          }
+          
+          try {
+            const response = await fetch("/api/image", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(requestBody),
+            })
+            
+            const data = await response.json().catch(() => ({}))
+            
+            if (!response.ok || !data?.success) {
+              throw new Error(data?.error || "Image generation failed")
+            }
+            
+            const markdown = `![Generated image](${data.imageUrl})\n\n*${data.provider} · ${data.model} · ${data.size}*\n\n**Prompt:** ${data.prompt}`
+            
+            setMessages((current: any) =>
+              current.map((msg: any) => (msg.id === messageId ? { ...msg, content: markdown } : msg))
+            )
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "Image generation failed"
+            setMessages((current: any) =>
+              current.map((msg: any) =>
+                msg.id === messageId
+                  ? { ...msg, content: `Image generation failed: ${errorMessage}` }
+                  : msg
+              )
+            )
+          } finally {
+            setIsGeneratingImage(false)
+          }
+        })()
+      }, 100)
+      
+      return updatedMessages
+    })
+  }, [apiKeys.openai, apiKeys.huggingface, imageSettings, mode, setMessages])
 
-    document.addEventListener("mousedown", handleClickOutside)
-    return () => {
-      document.removeEventListener("mousedown", handleClickOutside)
-    }
-  }, [isProviderMenuOpen])
+  const MarkdownComponents: Components = useMemo(
+    () => ({
+      h1: ({ children }) => (
+        <h1
+          className={`mb-2 text-base font-semibold text-slate-900 dark:text-slate-100 lg:text-lg ${uiStyle === "pixel" ? "pixel-font text-sm" : ""}`}
+        >
+          {children}
+        </h1>
+      ),
+      h2: ({ children }) => (
+        <h2
+          className={`mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100 lg:text-base ${uiStyle === "pixel" ? "pixel-font text-xs" : ""}`}
+        >
+          {children}
+        </h2>
+      ),
+      h3: ({ children }) => (
+        <h3
+          className={`mb-2 text-sm font-semibold text-slate-900 dark:text-slate-100 ${uiStyle === "pixel" ? "pixel-font text-xs" : ""}`}
+        >
+          {children}
+        </h3>
+      ),
+      p: ({ children }) => (
+        <p
+          className={`mb-2 text-sm leading-relaxed text-slate-700 dark:text-slate-300 ${uiStyle === "pixel" ? "pixel-font text-xs" : ""}`}
+        >
+          {children}
+        </p>
+      ),
+      ul: ({ children }) => (
+        <ul className={`ml-4 mb-2 list-disc space-y-1 text-sm text-slate-700 dark:text-slate-300 ${uiStyle === "pixel" ? "ml-0 list-none pixel-font text-xs" : ""}`}>{children}</ul>
+      ),
+      ol: ({ children }) => (
+        <ol className={`ml-4 mb-2 list-decimal space-y-1 text-sm text-slate-700 dark:text-slate-300 ${uiStyle === "pixel" ? "ml-0 list-none pixel-font text-xs" : ""}`}>{children}</ol>
+      ),
+      li: ({ children }) => (
+        <li className={`text-sm text-slate-700 dark:text-slate-300 ${uiStyle === "pixel" ? 'pixel-font text-xs before:content-["▶_"] before:text-cyan-600 dark:before:text-cyan-400' : ''}`}>{children}</li>
+      ),
+      strong: ({ children }) => (
+        <strong className={`text-slate-900 dark:text-slate-100 ${uiStyle === "pixel" ? "pixel-font" : "font-semibold"}`}>{children}</strong>
+      ),
+      em: ({ children }) => (
+        <em className={`italic text-slate-700 dark:text-slate-300 ${uiStyle === "pixel" ? "pixel-font" : ""}`}>{children}</em>
+      ),
+      code: ({ children, className }) => {
+        const isInline = !className?.includes("language-")
+        return (
+          <CodeBlock 
+            isInline={isInline}
+            className={className}
+            isPixel={uiStyle === "pixel"}
+          >
+            {String(children).replace(/\n$/, "")}
+          </CodeBlock>
+        )
+      },
+      pre: ({ children }) => <>{children}</>,
+      blockquote: ({ children }) => (
+        <blockquote className={`border-l-4 border-cyan-500/70 pl-4 text-sm italic text-slate-600 dark:text-slate-400 ${uiStyle === "pixel" ? "pixel-font" : ""}`}>{children}</blockquote>
+      ),
+      a: ({ href, children }) => (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`text-cyan-600 underline transition hover:text-cyan-500 dark:text-cyan-400 ${uiStyle === "pixel" ? "pixel-font" : ""}`}
+        >
+          {children}
+        </a>
+      ),
+    }),
+    [uiStyle],
+  )
+
+  const modeCounts: Record<Mode, number> = {
+    general: messagesByModeRef.current.general.length,
+    productivity: messagesByModeRef.current.productivity.length,
+    wellness: messagesByModeRef.current.wellness.length,
+    learning: messagesByModeRef.current.learning.length,
+    creative: messagesByModeRef.current.creative.length,
+    bff: messagesByModeRef.current.bff.length,
+  }
+
+  const providerApiKeySet = {
+    groq: true,
+    gemini: true,
+    openai: Boolean(apiKeys.openai),
+    claude: Boolean(apiKeys.claude),
+  }
 
   return (
     <>
-    <div
-      className={`h-screen overflow-hidden transition-colors duration-200 ${uiStyle === "pixel"
-        ? "bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 pixel-font"
-        : "bg-white dark:bg-gray-950 text-gray-900 dark:text-gray-100"
-        }`}
-    >
-      <div className="flex h-full">
-        {/* Mobile Menu Overlay */}
-        {isMobileMenuOpen && (
-          <div
-            className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
-            onClick={() => setIsMobileMenuOpen(false)}
+      <SidebarDrawer open={navigationOpen} onOpenChange={setNavigationOpen} isPixel={uiStyle === "pixel"}>
+        <SidebarNav
+          mode={mode}
+          modes={MODES}
+          quickActions={QUICK_ACTIONS[mode]}
+          onModeChange={handleModeChange}
+          onQuickAction={handleQuickAction}
+          modeCounts={modeCounts}
+          uiStyle={uiStyle}
+          onDismiss={() => setNavigationOpen(false)}
+          onOpenSettings={handleOpenSettings}
+        />
+      </SidebarDrawer>
+
+      <ChatAppShell
+        isPixel={uiStyle === "pixel"}
+        sidebar={
+          <SidebarNav
+            mode={mode}
+            modes={MODES}
+            quickActions={QUICK_ACTIONS[mode]}
+            onModeChange={handleModeChange}
+            onQuickAction={handleQuickAction}
+            modeCounts={modeCounts}
+            uiStyle={uiStyle}
+            onOpenSettings={handleOpenSettings}
           />
-        )}
-
-        {/* Left Sidebar */}
-        <div
-          className={`
-fixed lg:relative inset-y-0 left-0 z-50 w-80 flex flex-col transform transition-all duration-300 ease-out overflow-y-auto ${uiStyle === "pixel"
-              ? "bg-gray-200 dark:bg-gray-800 border-r-4 border-gray-400 dark:border-gray-600 pixel-border"
-              : "bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl border-r border-gray-200 dark:border-cyan-500/20 scrollbar-thin scrollbar-thumb-gray-400 dark:scrollbar-thumb-gray-500 scrollbar-track-transparent"
-            }
-${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}
-`}
-        >
-          {/* Header */}
-          <div
-            className={`p-6 ${uiStyle === "pixel"
-              ? "border-b-4 border-gray-400 dark:border-gray-600"
-              : "border-b border-gray-200 dark:border-cyan-500/20"
-              }`}
-          >
-            <div className="flex items-center space-x-4">
-              <div
-                className={`w-12 h-12 bg-gradient-to-br ${currentMode.gradient} flex items-center justify-center shadow-lg ${currentMode.glow} shadow-2xl transform transition-all duration-300 hover:scale-105 ${uiStyle === "pixel" ? `border-4 ${currentMode.borderPixel} pixel-border` : "rounded-2xl"
-                  }`}
-              >
-                <Sparkles className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1
-                  className={`text-lg font-bold ${uiStyle === "pixel"
-                    ? "text-gray-900 dark:text-gray-100 pixel-font"
-                    : "bg-gradient-to-r from-cyan-600 to-blue-600 dark:from-cyan-400 dark:to-blue-400 bg-clip-text text-transparent"
-                    }`}
-                >
-                  RADHIKA
-                </h1>
-                <p className={`text-xs text-gray-600 dark:text-gray-400 ${uiStyle === "pixel" ? "pixel-font" : ""}`}>
-                  {uiStyle === "pixel" ? "AI Assistant v2.0" : "Futuristic AI Assistant"}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setIsMobileMenuOpen(false)}
-            className={`lg:hidden absolute top-4 right-4 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 ${uiStyle === "pixel" ? "border-2 border-gray-400 dark:border-gray-600 pixel-border pixel-font" : ""
-              }`}
-          >
-            <X className="w-4 h-4" />
-          </Button>
-
-          <Separator
-            className={`${uiStyle === "pixel" ? "bg-gray-400 dark:bg-gray-600 h-1" : "bg-gray-200 dark:bg-cyan-500/20"
-              }`}
+        }
+        topbar={
+          <ChatTopbar
+            mode={mode}
+            modeMeta={currentMode}
+            uiStyle={uiStyle}
+            onToggleUI={() => setUIStyle(uiStyle === "modern" ? "pixel" : "modern")}
+            darkMode={darkMode}
+            onToggleTheme={() => setDarkMode((prev) => !prev)}
+            messageCount={messages.length}
+            voiceEnabled={voiceEnabled}
+            onToggleVoice={() => setVoiceEnabled(!voiceEnabled)}
+            onClearChat={clearChat}
+            onOpenSidebar={() => setNavigationOpen(true)}
+            providerLabel={providerLabel}
+            error={combinedError ?? null}
+            onDismissError={() => {
+              setError(null)
+              clearSpeechError()
+            }}
           />
-
-          {/* Mode Selector */}
-          <div className="p-4">
-            <h3
-              className={`text-xs font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wider mb-3 ${uiStyle === "pixel" ? "font-bold pixel-font" : ""
-                }`}
-            >
-              {uiStyle === "pixel" ? "MODES" : "Modes"}
-            </h3>
-            <div className={uiStyle === "pixel" ? "space-y-2" : "space-y-1"}>
-              {Object.entries(MODES).map(([key, modeData]) => {
-                const ModeIcon = modeData.icon
-                const isActive = mode === key
-                const modeMessages = messagesByModeRef.current[key as Mode]?.length || 0
-                return (
-                  <button
-                    key={key}
-                    onClick={() => handleModeChange(key as Mode)}
-                    className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium transition-all duration-200 ${uiStyle === "pixel"
-                      ? `border-2 pixel-border pixel-font font-bold ${isActive
-                        ? `${modeData.bgPixel} ${modeData.color} ${modeData.borderPixel} shadow-lg ${modeData.glow}`
-                        : "text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-300 dark:hover:bg-gray-700 border-gray-400 dark:border-gray-600"
-                      }`
-                      : `rounded-lg ${isActive
-                        ? `${modeData.bg} ${modeData.color} ${modeData.border} border shadow-lg ${modeData.glow}`
-                        : "text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800/50"
-                      }`
-                      }`}
-                  >
-                    <div className="flex items-center space-x-3">
-                      <ModeIcon className="w-4 h-4" />
-                      <span>{uiStyle === "pixel" ? modeData.label.toUpperCase() : modeData.label}</span>
-                    </div>
-                    {modeMessages > 0 && (
-                      <Badge
-                        variant="secondary"
-                        className={`text-xs ${uiStyle === "pixel"
-                          ? "bg-gray-300 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border-2 border-gray-400 dark:border-gray-600 pixel-border pixel-font"
-                          : "bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
-                          }`}
-                      >
-                        {modeMessages}
-                      </Badge>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          <Separator
-            className={`${uiStyle === "pixel" ? "bg-gray-400 dark:bg-gray-600 h-1" : "bg-gray-200 dark:bg-cyan-500/20"
-              }`}
-          />
-
-          {/* Quick Actions */}
-          <div className="p-4 flex-1">
-            <h3
-              className={`text-xs font-medium text-gray-600 dark:text-gray-400 uppercase tracking-wider mb-3 ${uiStyle === "pixel" ? "font-bold pixel-font" : ""
-                }`}
-            >
-              {uiStyle === "pixel" ? "QUICK ACTIONS" : "Quick Actions"}
-            </h3>
-            <div className={uiStyle === "pixel" ? "space-y-2" : "space-y-2"}>
-              {QUICK_ACTIONS[mode].map((action, index) => (
-                <button
-                  key={index}
-                  onClick={() => {
-                    handleQuickAction(action)
-                    setIsMobileMenuOpen(false)
-                  }}
-                  className={`w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors ${uiStyle === "pixel"
-                    ? "hover:bg-gray-300 dark:hover:bg-gray-700 border-2 border-gray-400 dark:border-gray-600 pixel-border pixel-font"
-                    : "hover:bg-gray-100 dark:hover:bg-gray-800/50 rounded-lg"
-                    }`}
-                >
-                  {uiStyle === "pixel" ? `▶ ${action}` : action}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Main Content */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Chat Header */}
-          <div
-            className={`flex-shrink-0 px-3 sm:px-6 py-2 sm:py-4 ${uiStyle === "pixel"
-              ? "bg-gray-200 dark:bg-gray-800 border-b-4 border-gray-400 dark:border-gray-600"
-              : "bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl border-b border-gray-200 dark:border-cyan-500/20"
-              }`}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2 sm:space-x-3 min-w-0 flex-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                  className={`lg:hidden text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 flex-shrink-0 p-1 ${uiStyle === "pixel"
-                    ? "hover:bg-gray-300 dark:hover:bg-gray-700 border-2 border-gray-400 dark:border-gray-600 pixel-border"
-                    : "hover:bg-gray-100 dark:hover:bg-gray-800/50"
-                    }`}
-                >
-                  <Menu className="w-4 h-4" />
-                </Button>
-                <div
-                  className={`p-1.5 sm:p-2 flex-shrink-0 shadow-lg ${currentMode.glow} ${uiStyle === "pixel"
-                    ? `${currentMode.bgPixel} ${currentMode.borderPixel} border-4 pixel-border`
-                    : `rounded-lg ${currentMode.bg} ${currentMode.border} border`
-                    }`}
-                >
-                  <CurrentModeIcon className={`w-4 h-4 sm:w-5 sm:h-5 ${currentMode.color}`} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <h2
-                    className={`text-base sm:text-lg font-semibold text-gray-900 dark:text-gray-100 truncate ${uiStyle === "pixel" ? "font-bold pixel-font" : ""
-                      }`}
-                  >
-                    {uiStyle === "pixel"
-                      ? `${currentMode.label.toUpperCase()} ASSISTANT`
-                      : `${currentMode.label} Assistant`}
-                  </h2>
-                  <p
-                    className={`text-xs text-gray-600 dark:text-gray-400 truncate hidden sm:block ${uiStyle === "pixel" ? "pixel-font" : ""
-                      }`}
-                  >
-                    {currentMode.description}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-2 sm:space-x-3 flex-shrink-0">
-                {/* UI Style Toggle Button */}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setUIStyle(uiStyle === "modern" ? "pixel" : "modern")}
-                  className={`text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 p-1 transition-colors ${uiStyle === "pixel"
-                    ? "hover:bg-gray-300 dark:hover:bg-gray-700 border-2 border-gray-400 dark:border-gray-600 pixel-border"
-                    : "hover:bg-gray-100 dark:hover:bg-gray-800/50"
-                    }`}
-                  title={`Switch to ${uiStyle === "modern" ? "Pixel" : "Modern"} UI`}
-                >
-                  {uiStyle === "modern" ? <Gamepad2 className="w-3.5 h-3.5" /> : <Palette className="w-3.5 h-3.5" />}
-                </Button>
-
-                {/* Theme Toggle Button */}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setDarkMode(!darkMode)}
-                  className={`text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 p-1 ${uiStyle === "pixel"
-                    ? "hover:bg-gray-300 dark:hover:bg-gray-700 border-2 border-gray-400 dark:border-gray-600 pixel-border"
-                    : "hover:bg-gray-100 dark:hover:bg-gray-800/50"
-                    }`}
-                >
-                  {darkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-                </Button>
-
-                <Badge
-                  variant="secondary"
-                  className={`hidden sm:inline-flex ${uiStyle === "pixel"
-                    ? "bg-gray-300 dark:bg-gray-700 text-gray-800 dark:text-gray-300 border-2 border-gray-400 dark:border-gray-600 pixel-border pixel-font"
-                    : "bg-gray-200 dark:bg-gray-800 text-gray-800 dark:text-gray-300 border-gray-300 dark:border-cyan-500/30"
-                    }`}
-                >
-                  <MessageCircle className="w-3 h-3 mr-2" />
-                  {messages.length}
-                </Badge>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setVoiceEnabled(!voiceEnabled)}
-                  className={`p-1 transition-colors ${voiceEnabled
-                    ? "text-cyan-600 dark:text-cyan-400 hover:text-cyan-500 dark:hover:text-cyan-300"
-                    : "text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
-                    } ${uiStyle === "pixel"
-                      ? `border-2 pixel-border ${voiceEnabled ? "border-cyan-400 dark:border-cyan-500" : "border-gray-400 dark:border-gray-600"}`
-                      : ""
-                    }`}
-                >
-                  {voiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={clearChat}
-                  disabled={messages.length === 0}
-                  className={`text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 p-1 disabled:opacity-50 ${uiStyle === "pixel"
-                    ? "hover:bg-gray-300 dark:hover:bg-gray-700 border-2 border-gray-400 dark:border-gray-600 pixel-border"
-                    : "hover:bg-gray-100 dark:hover:bg-gray-800/50"
-                    }`}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className={`text-gray-800 dark:text-gray-300 transition-colors p-2 ${uiStyle === "pixel"
-                    ? "bg-gray-300 dark:bg-gray-700 hover:bg-gray-400 dark:hover:bg-gray-600 border-2 border-gray-400 dark:border-gray-600 pixel-border"
-                    : "bg-gray-100/50 dark:bg-gray-800/50 hover:bg-gray-200/50 dark:hover:bg-gray-700/50"
-                    }`}
-                  asChild
-                >
-                  <a
-                    href="https://github.com/RS-labhub/radhika"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label="View on GitHub"
-                  >
-                    <Github className="w-4 h-4" />
-                  </a>
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          {/* Error Display */}
-          {combinedError && (
-            <div
-              className={`px-3 sm:px-6 py-2 ${uiStyle === "pixel"
-                ? "bg-red-200 dark:bg-red-900/30 border-b-4 border-red-400 dark:border-red-600"
-                : "bg-red-50 dark:bg-red-950/30 border-b border-red-200 dark:border-red-800/50"
-                }`}
-            >
-              <div className="flex items-center space-x-2 text-red-800 dark:text-red-400">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                <p className={`text-sm ${uiStyle === "pixel" ? "pixel-font" : ""}`}>
-                  {uiStyle === "pixel" ? "ERROR: " : ""}
-                  {combinedError}
-                </p>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    setError(null)
-                    clearSpeechError()
-                  }}
-                  className={`ml-auto text-red-800 dark:text-red-400 hover:text-red-900 dark:hover:text-red-300 p-1 ${uiStyle === "pixel" ? "border-2 border-red-400 dark:border-red-600 pixel-border" : ""
-                    }`}
-                >
-                  <X className="w-3 h-3" />
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {/* Messages */}
-          <div
-            className={`flex-1 overflow-y-auto ${uiStyle === "pixel"
-              ? "bg-gray-50 dark:bg-gray-950"
-              : "bg-gray-50 dark:bg-gray-950 scrollbar-thin scrollbar-thumb-gray-400 dark:scrollbar-thumb-gray-500 scrollbar-track-transparent"
-              }`}
-          >
-            <div className="max-w-4xl mx-auto px-2 sm:px-6 py-3 sm:py-6">
-              {messages.length === 0 && (
-                <>
-                  <div className="text-center py-6 sm:py-10">
-                    <div className="mb-8">
-                      <AIVisualization mode={mode} isActive={isLoading || isListening} />
-                    </div>
-                    <h3
-                      className={`text-xl sm:text-2xl font-semibold text-gray-900 dark:text-gray-100 mb-2 ${uiStyle === "pixel" ? "font-bold pixel-font" : ""
-                        }`}
-                    >
-                      {mode === "bff"
-                        ? uiStyle === "pixel"
-                          ? "HEY BESTIE! WHAT'S ON YOUR MIND? 💕"
-                          : "Hey bestie! What's on your mind? 💕"
-                        : uiStyle === "pixel"
-                          ? `WHAT CAN I HELP YOU ${mode === "general" ? "WITH" : `${mode === "creative" ? "CREATE" : mode.toUpperCase()}`}?`
-                          : `What can I help you ${mode === "general" ? "with" : `${mode === "creative" ? "create" : mode}`}?`}
-                    </h3>
-                    <p
-                      className={`text-sm sm:text-base text-gray-700 dark:text-gray-400 max-w-md mx-auto px-2 sm:px-4 ${uiStyle === "pixel" ? "pixel-font" : ""
-                        }`}
-                    >
-                      {mode === "bff"
-                        ? "I'm your GenZ bestie who speaks your language! Chat with me in any language and I'll vibe with you! ✨"
-                        : `I'm your ${currentMode.label.toLowerCase()} assistant. Ask me anything or use the quick actions to get started.`}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap justify-center gap-2 px-2">
-                    {QUICK_ACTIONS[mode].map((action, index) => (
-                      <button
-                        key={index}
-                        onClick={() => handleQuickAction(action)}
-                        className={`px-3 py-2 text-sm text-gray-700 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors ${uiStyle === "pixel"
-                          ? "hover:bg-gray-300 dark:hover:bg-gray-700 border-2 border-gray-400 dark:border-gray-600 pixel-border pixel-font"
-                          : "hover:bg-gray-100 dark:hover:bg-gray-800/50 rounded-lg border border-gray-300 dark:border-cyan-500/20 hover:border-gray-400 dark:hover:border-cyan-500/40"
-                          }`}
-                      >
-                        {uiStyle === "pixel" ? `▶ ${action}` : action}
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-
-              <div className="space-y-3 sm:space-y-5">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex space-x-2 sm:space-x-3 ${message.role === "user" ? "justify-end" : ""}`}
-                  >
-                    {message.role === "assistant" && (
-                      <div
-                        className={`flex-shrink-0 w-8 h-8 flex items-center justify-center shadow-lg ${currentMode.glow} ${uiStyle === "pixel"
-                          ? `${currentMode.bgPixel} ${currentMode.borderPixel} border-4 pixel-border`
-                          : `rounded-lg ${currentMode.bg} ${currentMode.border} border`
-                          }`}
-                      >
-                        <CurrentModeIcon className={`w-5 h-5 ${currentMode.color}`} />
-                      </div>
-                    )}
-                    <div
-                      className={`flex-1 max-w-[80%] sm:max-w-[85%] ${message.role === "user" ? "flex flex-col items-end" : "flex flex-col items-start"}`}
-                    >
-                      <div
-                        className={`px-3 py-2 ${message.role === "user"
-                          ? `bg-gradient-to-r ${currentMode.gradient} text-white max-w-full shadow-lg ${currentMode.glow} ${uiStyle === "pixel" ? `${currentMode.borderPixel} border-4 pixel-border` : "rounded-2xl"
-                          }`
-                          : `text-gray-900 dark:text-gray-100 ${uiStyle === "pixel"
-                            ? "bg-white dark:bg-gray-800 border-4 border-gray-400 dark:border-gray-600 pixel-border"
-                            : "bg-white dark:bg-gray-800/50 backdrop-blur-sm border border-gray-200 dark:border-gray-700/50 rounded-2xl"
-                          }`
-                          }`}
-                      >
-                        {message.role === "user" ? (
-                          <div className={`text-sm break-words ${uiStyle === "pixel" ? "pixel-font font-bold" : ""}`}>
-                            {message.content}
-                          </div>
-                        ) : (
-                          <div className="prose prose-sm max-w-none dark:prose-invert">
-                            <ReactMarkdown components={MarkdownComponents}>{message.content}</ReactMarkdown>
-                          </div>
-                        )}
-                      </div>
-                      <div
-                        className={`text-[10px] sm:text-xs text-gray-600 dark:text-gray-500 mt-0.5 sm:mt-1 ${message.role === "user" ? "text-right" : "text-left"
-                          } ${uiStyle === "pixel" ? "pixel-font" : ""}`}
-                      >
-                        {uiStyle === "pixel" ? "[" : ""}
-                        {formatTime(message.createdAt ? new Date(message.createdAt).getTime() : Date.now())}
-                        {uiStyle === "pixel" ? "]" : ""}
-                      </div>
-                    </div>
-                    {message.role === "user" && (
-                      <div
-                        className={`flex-shrink-0 w-8 h-8 bg-gradient-to-r from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20 ${uiStyle === "pixel" ? "border-4 border-cyan-400 pixel-border" : "rounded-lg"
-                          }`}
-                      >
-                        <User className="w-5 h-5 text-white" />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-              {isLoading && (
-                <div className="flex space-x-2 sm:space-x-3">
-                  <div
-                    className={`flex-shrink-0 w-8 h-8 flex items-center justify-center shadow-lg ${currentMode.glow} ${uiStyle === "pixel"
-                      ? `${currentMode.bgPixel} ${currentMode.borderPixel} border-4 pixel-border`
-                      : `rounded-lg ${currentMode.bg} ${currentMode.border} border`
-                      }`}
-                  >
-                    <CurrentModeIcon className={`w-5 h-5 ${currentMode.color} animate-pulse`} />
-                  </div>
-                  <div className="flex-1">
-                    <div
-                      className={`px-3 py-2 ${uiStyle === "pixel"
-                        ? "bg-white dark:bg-gray-800 border-4 border-gray-400 dark:border-gray-600 pixel-border"
-                        : "bg-white dark:bg-gray-800/50 backdrop-blur-sm border border-gray-200 dark:border-gray-700/50 rounded-2xl"
-                        }`}
-                    >
-                      <div className="flex items-center space-x-2">
-                        <div className="flex space-x-1">
-                          <div
-                            className={`bg-cyan-600 dark:bg-cyan-400 animate-bounce ${uiStyle === "pixel" ? "w-2 h-2 pixel-border" : "w-1.5 h-1.5 rounded-full"
-                              }`}
-                          />
-                          <div
-                            className={`bg-cyan-600 dark:bg-cyan-400 animate-bounce ${uiStyle === "pixel" ? "w-2 h-2 pixel-border" : "w-1.5 h-1.5 rounded-full"
-                              }`}
-                            style={{ animationDelay: "0.1s" }}
-                          />
-                          <div
-                            className={`bg-cyan-600 dark:bg-cyan-400 animate-bounce ${uiStyle === "pixel" ? "w-2 h-2 pixel-border" : "w-1.5 h-1.5 rounded-full"
-                              }`}
-                            style={{ animationDelay: "0.2s" }}
-                          />
-                        </div>
-                        <span
-                          className={`text-xs text-gray-700 dark:text-gray-400 ${uiStyle === "pixel" ? "pixel-font" : ""}`}
-                        >
-                          {uiStyle === "pixel" ? "RADHIKA IS PROCESSING..." : "Radhika is thinking..."}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input */}
-          <div
-            className={`flex-shrink-0 p-2 sm:p-4 ${uiStyle === "pixel"
-              ? "bg-gray-200 dark:bg-gray-800 border-t-4 border-gray-400 dark:border-gray-600"
-              : "bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl border-t border-gray-200 dark:border-cyan-500/20"
-              }`}
-          >
-            <div className="max-w-4xl mx-auto">
-              <form onSubmit={handleSubmit} className="relative">
-                <Textarea
-                  value={input}
-                  onChange={handleInputChange}
-                  placeholder={uiStyle === "pixel" ? `> ${currentMode.placeholder}` : currentMode.placeholder}
-                  className={`min-h-[50px] sm:min-h-[60px] max-h-32 resize-none text-gray-900 dark:text-gray-100 placeholder-gray-600 dark:placeholder-gray-500 focus:ring-0 pr-20 sm:pr-24 text-base sm:text-lg leading-relaxed ${uiStyle === "pixel"
-                    ? "bg-gray-100 dark:bg-gray-900 border-4 border-gray-400 dark:border-gray-600 focus:border-cyan-500 dark:focus:border-cyan-400 pixel-font pixel-border"
-                    : "bg-gray-100 dark:bg-gray-800/50 backdrop-blur-sm border-gray-300 dark:border-gray-700/50 focus:border-cyan-500/50"
-                    }`}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault()
-                      handleSubmit(e as any)
-                    }
-                  }}
-                />
-                <div className="absolute right-1.5 bottom-1.5 flex items-center space-x-1">
-                  {isSpeaking && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={stopSpeaking}
-                      className={`text-red-700 dark:text-red-400 hover:text-red-800 dark:hover:text-red-300 p-2 ${uiStyle === "pixel"
-                        ? "hover:bg-red-200 dark:hover:bg-red-900/30 border-2 border-red-400 dark:border-red-600 pixel-border"
-                        : "hover:bg-red-50 dark:hover:bg-red-950/30 rounded-xl"
-                        }`}
-                    >
-                      <VolumeX className="w-4 h-4" />
-                    </Button>
-                  )}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleVoiceInput}
-                    className={`p-2 transition-all duration-200 ${isListening
-                      ? `text-red-700 dark:text-red-400 animate-pulse ${uiStyle === "pixel"
-                        ? "bg-red-200 dark:bg-red-900/30 hover:bg-red-300 dark:hover:bg-red-800/40 border-4 border-red-400 dark:border-red-600 pixel-border"
-                        : "bg-red-50 dark:bg-red-950/30 hover:bg-red-100 dark:hover:bg-red-900/40 rounded-xl"
-                      }`
-                      : `text-gray-600 dark:text-gray-500 hover:text-gray-800 dark:hover:text-gray-300 ${uiStyle === "pixel"
-                        ? "hover:bg-gray-300 dark:hover:bg-gray-700 border-4 border-gray-400 dark:border-gray-600 pixel-border"
-                        : "hover:bg-gray-100 dark:hover:bg-gray-700/50 rounded-xl"
-                      }`
-                      }`}
-                    disabled={isLoading}
-                  >
-                    {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                  </Button>
-                  <Button
-                    type="submit"
-                    size="sm"
-                    disabled={isLoading || !input.trim()}
-                    className={`bg-gradient-to-r ${currentMode.gradient} hover:opacity-90 text-white p-2 shadow-lg ${currentMode.glow} disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 hover:shadow-xl ${uiStyle === "pixel" ? `border-4 ${currentMode.borderPixel} pixel-border` : "rounded-xl"
-                      }`}
-                  >
-                    <ArrowUp className="w-4 h-4 sm:w-5 sm:h-5" />
-                  </Button>
-                </div>
-              </form>
-
-              {/* Model selector */}
-              <div
-                className={`flex items-center justify-between mt-2 text-[10px] sm:text-xs text-gray-600 dark:text-gray-500 ${uiStyle === "pixel" ? "pixel-font" : ""
-                  }`}
-              >
-                <span className="hidden sm:inline">
-                  {uiStyle === "pixel"
-                    ? "[ENTER] = SEND | [SHIFT+ENTER] = NEW LINE"
-                    : "Press Enter to send, Shift+Enter for new line"}
-                </span>
-                <span className="sm:hidden">{uiStyle === "pixel" ? "[TAP TO SEND]" : "Tap to send"}</span>
-
-                <div className="flex items-center space-x-3">
-                  <div className="flex items-center space-x-2">
-                    <span className={`${currentMode.color} font-medium ${uiStyle === "pixel" ? "font-bold" : ""}`}>
-                      {uiStyle === "pixel" ? currentMode.label.toUpperCase() : currentMode.label}
-                    </span>
-                  </div>
-
-                  <div
-                    className={`flex items-center space-x-2 pl-3 ${uiStyle === "pixel"
-                      ? "border-l-2 border-gray-400 dark:border-gray-600"
-                      : "border-l border-gray-300 dark:border-gray-700"
-                      }`}
-                  >
-                    <Cpu className="w-3 h-3 text-gray-600 dark:text-gray-400" />
-
-                    {/* Custom Provider Dropdown */}
-                    <div className="relative" data-provider-menu="true">
-                      <button
-                        onClick={() => setIsProviderMenuOpen(!isProviderMenuOpen)}
-                        className={`h-6 px-2 text-xs flex items-center gap-1 font-medium transition-colors ${uiStyle === "pixel"
-                          ? "hover:bg-gray-300 dark:hover:bg-gray-700 border-2 border-gray-400 dark:border-gray-600 pixel-border font-bold"
-                          : "rounded hover:bg-gray-100 dark:hover:bg-gray-800"
-                          }`}
-                      >
-                        <span
-                          className={`${provider === "groq"
-                            ? "text-pink-700 dark:text-pink-400"
-                            : provider === "gemini"
-                              ? "text-emerald-700 dark:text-emerald-400"
-                              : provider === "openai"
-                                ? "text-violet-700 dark:text-violet-400"
-                                : "text-orange-700 dark:text-orange-400"
-                            }`}
-                        >
-                          {uiStyle === "pixel" ? PROVIDERS[provider].name.toUpperCase() : PROVIDERS[provider].name}
-                        </span>
-                        <ChevronDown className="w-3 h-3" />
-                      </button>
-
-                      {isProviderMenuOpen && (
-                        <div
-                          className={`absolute right-0 bottom-full mb-1 w-40 py-1 z-50 ${uiStyle === "pixel"
-                            ? "bg-gray-200 dark:bg-gray-800 border-4 border-gray-400 dark:border-gray-600 pixel-border"
-                            : "bg-white dark:bg-gray-800 rounded-md shadow-lg border border-gray-200 dark:border-gray-700"
-                            }`}
-                        >
-                          {Object.entries(PROVIDERS).map(([key, providerData]) => (
-                            <button
-                              key={key}
-                              onClick={() => handleProviderChange(key as Provider)}
-                              className={`flex items-center justify-between w-full px-3 py-1.5 text-sm text-left hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100 ${uiStyle === "pixel" ? "pixel-font" : ""
-                                }`}
-                            >
-                              <span className={`${key === provider ? "font-medium" : ""}`}>
-                                {uiStyle === "pixel" ? providerData.name.toUpperCase() : providerData.name}
-                              </span>
-                              {key === provider ? (
-                                <Check className="w-3 h-3" />
-                              ) : (
-                                providerData.requiresApiKey &&
-                                ((key === "openai" && !apiKeys.openai) || (key === "claude" && !apiKeys.claude)) && (
-                                  <Key className="w-3 h-3 text-gray-400" />
-                                )
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Sidebar - Activity Matrix */}
-        <div
-          className={`hidden xl:flex w-80 flex-col ${uiStyle === "pixel"
-            ? "bg-gray-200 dark:bg-gray-800 border-l-4 border-gray-400 dark:border-gray-600"
-            : "bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl border-l border-gray-200 dark:border-cyan-500/20"
-            }`}
-        >
-          <div
-            className={`p-6 ${uiStyle === "pixel" ? "max-h-[80vh]  pr-2" : ""
-              }`}
-          >
-            <ActivityMatrix messages={messages} currentMode={mode} />
-          </div>
-
-        </div>
-      </div>
-
-      {/* API Key Dialog */}
-      <Dialog open={isApiKeyDialogOpen} onOpenChange={setIsApiKeyDialogOpen}>
-        <DialogContent
-          className={`w-[calc(100%-2rem)] max-w-md sm:w-full sm:mx-auto px-4 py-6 sm:px-6 sm:py-8 ${uiStyle === "pixel"
-              ? "bg-gray-200 dark:bg-gray-800 border-4 border-gray-400 dark:border-gray-600 pixel-border rounded-none"
-              : "bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg"
-            }`}
-        >
-          <DialogHeader>
-            <DialogTitle
-              className={`text-gray-900 dark:text-gray-100 ${uiStyle === "pixel" ? "pixel-font font-bold" : ""}`}
-            >
-              {uiStyle === "pixel"
-                ? `${PROVIDERS[selectedProvider]?.name.toUpperCase()} API KEY REQUIRED`
-                : `Enter ${PROVIDERS[selectedProvider]?.name} API Key`}
-            </DialogTitle>
-            <DialogDescription
-              className={`text-gray-600 dark:text-gray-400 ${uiStyle === "pixel" ? "pixel-font" : ""}`}
-            >
-              To use {PROVIDERS[selectedProvider]?.name}, please enter your API key. It will be stored securely in your
-              browser.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <label
-                htmlFor="api-key"
-                className={`text-sm font-medium text-gray-900 dark:text-gray-100 ${uiStyle === "pixel" ? "font-bold pixel-font" : ""
-                  }`}
-              >
-                {uiStyle === "pixel"
-                  ? `${PROVIDERS[selectedProvider]?.name.toUpperCase()} API KEY`
-                  : `${PROVIDERS[selectedProvider]?.name} API Key`}
-              </label>
-              <Input
-                id="api-key"
-                type="password"
-                placeholder={`Enter your ${PROVIDERS[selectedProvider]?.name} API key`}
-                value={tempApiKey}
-                onChange={(e) => setTempApiKey(e.target.value)}
-                className={`text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 ${uiStyle === "pixel"
-                  ? "bg-gray-100 dark:bg-gray-900 border-4 border-gray-400 dark:border-gray-600 pixel-font pixel-border"
-                  : "bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600"
-                  }`}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault()
-                    handleSaveApiKey()
-                  }
-                }}
-              />
-            </div>
-          </div>
-          <DialogFooter className="flex flex-col sm:flex-row sm:justify-end gap-2 sm:gap-3">
-            <Button
-              variant="outline"
-              onClick={() => setIsApiKeyDialogOpen(false)}
-              className={`text-gray-900 dark:text-gray-100 ${uiStyle === "pixel"
-                ? "border-4 border-gray-400 dark:border-gray-600 hover:bg-gray-300 dark:hover:bg-gray-700 pixel-font pixel-border"
-                : "border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800"
-                }`}
-            >
-              {uiStyle === "pixel" ? "CANCEL" : "Cancel"}
-            </Button>
-            <Button
-              onClick={handleSaveApiKey}
-              disabled={!tempApiKey.trim()}
-              className={`text-white ${uiStyle === "pixel"
-                ? "bg-cyan-600 hover:bg-cyan-700 pixel-font font-bold border-4 border-cyan-400 pixel-border"
-                : "bg-cyan-600 hover:bg-cyan-700"
-                }`}
-            >
-              {uiStyle === "pixel" ? "SAVE & SWITCH" : "Save & Switch"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <style jsx global>{`
-        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
-        
-        .pixel-font {
-          font-family: 'Press Start 2P', 'Courier New', monospace;
-          image-rendering: pixelated;
-          image-rendering: -moz-crisp-edges;
-          image-rendering: crisp-edges;
         }
-        
-        .pixel-border {
-          border-style: solid;
-          image-rendering: pixelated;
-          image-rendering: -moz-crisp-edges;
-          image-rendering: crisp-edges;
+        insights={
+          <InsightsPanel uiStyle={uiStyle}>
+            <ActivityMatrix messages={messages} currentMode={mode} uiStyle={uiStyle} />
+          </InsightsPanel>
         }
-        
-        /* Remove all rounded corners for pixel perfect look */
-        .pixel-font * {
-          border-radius: 0 !important;
+      >
+        <ChatFeed
+          messages={messages as any}
+          currentMode={currentMode}
+          uiStyle={uiStyle}
+          MarkdownComponents={MarkdownComponents}
+          formatTime={formatTime}
+          isLoading={isLoading}
+          isListening={isListening}
+          messagesEndRef={messagesEndRef}
+          quickActions={QUICK_ACTIONS[mode]}
+          onQuickAction={handleQuickAction}
+          mode={mode}
+          onImageRetry={handleImageRetry}
+        />
+        <ChatComposer
+          input={input}
+          onInputChange={handleInputChange}
+          onSubmit={handleComposerSubmit}
+          placeholder={currentMode.placeholder}
+          isLoading={isLoading}
+          isListening={isListening}
+          isSpeaking={isSpeaking}
+          onVoiceInput={handleVoiceInput}
+          onStopSpeaking={stopSpeaking}
+          provider={provider}
+          providers={PROVIDERS}
+          onProviderChange={handleProviderChange}
+          uiStyle={uiStyle}
+          providerApiKeySet={providerApiKeySet}
+          imageGenerationEnabled={imageGenerationEnabled}
+          onToggleImageGeneration={handleToggleImageGeneration}
+          onOpenImageSettings={handleOpenImageGenerationSettings}
+          imageSettingsLabel={imageSettingsLabel}
+          isGeneratingImage={isGeneratingImage}
+        />
+      </ChatAppShell>
+
+      <ImageSettingsDialog
+        open={isImageSettingsDialogOpen}
+        onOpenChange={setIsImageSettingsDialogOpen}
+        settings={imageSettings}
+        onSave={handleImageSettingsSave}
+        uiStyle={uiStyle}
+        providerKeyStatus={
+          {
+            pollinations_free: true,
+            free_alternatives: true,
+            openai: Boolean(apiKeys.openai),
+            huggingface: Boolean(apiKeys.huggingface),
+            // gemini: true,
+          } satisfies Record<ImageProviderId, boolean>
         }
-        
-        .scrollbar-thin {
-          scrollbar-width: thin;
+        onRequestProviderKey={promptForProviderKey}
+      />
+
+      <SettingsDialog
+        open={isSettingsDialogOpen}
+        onOpenChange={setIsSettingsDialogOpen}
+        apiKeys={apiKeys}
+        providers={PROVIDERS}
+        onManageProvider={handleManageProvider}
+        uiStyle={uiStyle}
+      />
+
+      <ApiKeyDialog
+        open={isApiKeyDialogOpen}
+        onOpenChange={handleApiDialogChange}
+        provider={selectedProvider}
+        providerMeta={KEY_PROVIDER_METADATA[selectedProvider]}
+        tempApiKey={tempApiKey}
+        onTempApiKeyChange={(event) => setTempApiKey(event.target.value)}
+        onSave={handleSaveApiKey}
+        onRemove={handleRemoveApiKey}
+        hasExistingKey={
+          selectedProvider === "openai"
+            ? Boolean(apiKeys.openai)
+            : selectedProvider === "claude"
+              ? Boolean(apiKeys.claude)
+              : selectedProvider === "huggingface"
+                ? Boolean(apiKeys.huggingface)
+                : false
         }
-        .scrollbar-thumb-gray-400 {
-          scrollbar-color: #9ca3af transparent;
-        }
-        .dark .scrollbar-thumb-gray-500 {
-          scrollbar-color: #6b7280 transparent;
-        }
-        .scrollbar-track-transparent {
-          scrollbar-track-color: transparent;
-        }
-        
-        /* Webkit scrollbar styles */
-        .scrollbar-thin::-webkit-scrollbar {
-          width: 2px;
-          height: 2px;
-        }
-        .scrollbar-thin::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .scrollbar-thin::-webkit-scrollbar-thumb {
-          background-color: #9ca3af;
-          border-radius: 1px;
-        }
-        .dark .scrollbar-thin::-webkit-scrollbar-thumb {
-          background-color: #6b7280;
-        }
-        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-          background-color: #6b7280;
-        }
-        .dark .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-          background-color: #9ca3af;
-        }
-        
-        /* Pixel button effects */
-        .pixel-font button:active {
-          transform: translateY(2px);
-        }
-        
-        /* Remove focus rings and add pixel borders */
-        .pixel-font *:focus {
-          outline: none !important;
-          box-shadow: none !important;
-        }
-        
-        /* Pixel-perfect animations */
-        @keyframes pixelBounce {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-4px); }
-        }
-        
-        .pixel-font .animate-bounce {
-          animation: pixelBounce 1s infinite;
-        }
-      `}</style>
-    </div>
-    <Analytics />
-    <SpeedInsights />
+        uiStyle={uiStyle}
+      />
+
+      <Analytics />
+      <SpeedInsights />
     </>
   )
 }

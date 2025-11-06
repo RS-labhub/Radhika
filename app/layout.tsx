@@ -1,5 +1,11 @@
-import type { Metadata } from 'next'
-import './globals.css'
+import type { Metadata } from "next"
+import "./globals.css"
+import { ThemeProvider } from "@/components/theme-provider"
+import { Plus_Jakarta_Sans, Space_Grotesk, Press_Start_2P } from "next/font/google"
+
+const sans = Plus_Jakarta_Sans({ subsets: ["latin"], variable: "--font-sans" })
+const display = Space_Grotesk({ subsets: ["latin"], variable: "--font-display" })
+const pixel = Press_Start_2P({ subsets: ["latin"], weight: "400", variable: "--font-pixel" })
 
 export const metadata: Metadata = {
   title: 'Radhika',
@@ -41,8 +47,12 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" suppressHydrationWarning>
+      <body className={`${sans.variable} ${display.variable} ${pixel.variable} font-sans antialiased`}>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          {children}
+        </ThemeProvider>
+      </body>
     </html>
   )
 }

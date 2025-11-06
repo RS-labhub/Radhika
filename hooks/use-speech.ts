@@ -152,7 +152,7 @@ export function useSpeech() {
     } else {
       selectVoice();
     }
-  }, [isSpeaking]);
+  }, []);
 
   const stopSpeaking = useCallback(() => {
     const synthesis = synthesisRef.current;
