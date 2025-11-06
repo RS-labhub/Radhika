@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import type { Mode, ModeDefinition, UIStyle } from "@/types/chat"
-import { Settings } from "lucide-react"
+import { Settings, X } from "lucide-react"
 
 interface SidebarNavProps {
   mode: Mode
@@ -17,16 +17,18 @@ interface SidebarNavProps {
   uiStyle: UIStyle
   onDismiss?: () => void
   onOpenSettings?: () => void
+  showQuickActions?: boolean
+  showCloseButton?: boolean
 }
 
-export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAction, modeCounts, uiStyle, onDismiss, onOpenSettings }: SidebarNavProps) {
+export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAction, modeCounts, uiStyle, onDismiss, onOpenSettings, showQuickActions = true, showCloseButton = false }: SidebarNavProps) {
   const isPixel = uiStyle === "pixel"
 
   const wrapperClass = cn(
     "relative flex h-full w-full flex-col",
     isPixel
-      ? "pixel-panel gap-5 px-5 pb-6 pt-5 text-slate-700 dark:text-slate-200"
-      : "gap-6 rounded-[32px] border border-white/40 bg-white/65 p-6 backdrop-blur-xl shadow-[0_20px_60px_-30px_rgba(15,23,42,0.35)] dark:border-white/10 dark:bg-slate-900/65 dark:shadow-[0_24px_70px_-32px_rgba(2,6,23,0.85)]",
+      ? "pixel-panel gap-5 px-4 pb-6 pt-5 text-slate-700 dark:text-slate-200 sm:px-5"
+      : "gap-5 rounded-3xl border border-white/30 bg-white/75 p-5 backdrop-blur-xl shadow-[0_20px_50px_-26px_rgba(15,23,42,0.35)] dark:border-white/10 dark:bg-slate-900/65 dark:shadow-[0_24px_70px_-32px_rgba(2,6,23,0.85)] sm:gap-6 sm:rounded-[28px] sm:p-6 lg:rounded-[32px]",
   )
 
   const sectionTitleClass = isPixel
@@ -59,15 +61,33 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
               RADHIKA
             </h1>
           </div>
-          <Badge
-            variant="secondary"
-            className={cn(
-              "rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600 shadow-sm dark:bg-slate-800/70 dark:text-slate-200",
-              isPixel && "pixel-badge",
-            )}
-          >
-            v2.0
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge
+              variant="secondary"
+              className={cn(
+                "rounded-full bg-slate-100 text-[11px] font-semibold text-slate-600 shadow-sm dark:bg-slate-800/70 dark:text-slate-200",
+                isPixel && "pixel-badge",
+              )}
+            >
+              v2.0
+            </Badge>
+            {showCloseButton && onDismiss ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => onDismiss()}
+                className={cn(
+                  "h-8 w-8 rounded-full border border-white/30 bg-white/30 text-slate-500 hover:bg-white/70 hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/40 dark:text-slate-300 dark:hover:bg-slate-800/70",
+                  isPixel && "pixel-control h-7 w-7 text-slate-700 dark:text-slate-200 sm:h-8 sm:w-8",
+                  "lg:hidden",
+                )}
+                aria-label="Close navigation"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            ) : null}
+          </div>
         </div>
         <p
           className={cn(
@@ -170,31 +190,33 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
         </div>
       </div>
 
-      <div className="mt-auto space-y-3">
-        <h2 className={sectionTitleClass}>Quick Actions</h2>
-        <div className="grid gap-2">
-          {quickActions.map((action) => (
-            <Fragment key={action}>
-              <button
-                type="button"
-                onClick={() => {
-                  onQuickAction(action)
-                  onDismiss?.()
-                }}
-                className={cn(
-                  "flex w-full items-center justify-between text-left transition-colors",
-                  isPixel
-                    ? "pixel-tile pixel-quick-action px-3 py-2"
-                    : "rounded-full border px-4 py-2 text-sm font-medium text-slate-600 hover:border-slate-400 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white border-white/40 bg-white/40 backdrop-blur hover:bg-white/70 dark:border-white/10 dark:bg-slate-900/40 dark:hover:bg-slate-800/60",
-                )}
-              >
-                <span className={cn(isPixel && "text-[0.78rem]")}>{action}</span>
-                {isPixel ? <span className="text-[0.65rem] text-slate-400 dark:text-slate-500">↗</span> : null}
-              </button>
-            </Fragment>
-          ))}
+      {showQuickActions ? (
+        <div className="mt-auto space-y-3">
+          <h2 className={sectionTitleClass}>Quick Actions</h2>
+          <div className="grid gap-2">
+            {quickActions.map((action) => (
+              <Fragment key={action}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onQuickAction(action)
+                    onDismiss?.()
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between text-left transition-colors",
+                    isPixel
+                      ? "pixel-tile pixel-quick-action px-3 py-2"
+                      : "rounded-full border px-4 py-2 text-sm font-medium text-slate-600 hover:border-slate-400 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white border-white/40 bg-white/40 backdrop-blur hover:bg-white/70 dark:border-white/10 dark:bg-slate-900/40 dark:hover:bg-slate-800/60",
+                  )}
+                >
+                  <span className={cn(isPixel && "text-[0.78rem]")}>{action}</span>
+                  {isPixel ? <span className="text-[0.65rem] text-slate-400 dark:text-slate-500">↗</span> : null}
+                </button>
+              </Fragment>
+            ))}
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   )
 }

@@ -1245,6 +1245,8 @@ export default function FuturisticRadhika() {
           uiStyle={uiStyle}
           onDismiss={() => setNavigationOpen(false)}
           onOpenSettings={handleOpenSettings}
+          showCloseButton
+          showQuickActions={false}
         />
       </SidebarDrawer>
 

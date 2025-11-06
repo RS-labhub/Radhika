@@ -83,16 +83,6 @@ export function ChatTopbar({
     <div className="flex flex-col gap-2">
       <div className={surfaceClass}>
         <div className="flex items-center gap-2 sm:gap-3">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={onOpenSidebar}
-            className={cn(controlButton, "sm:hidden")}
-            aria-label="Open navigation"
-          >
-            <Menu className="h-4 w-4" />
-          </Button>
           <div className={iconWrapClass}>
             <CurrentModeIcon className={cn("h-5 w-5", modeMeta.color)} />
           </div>
@@ -142,6 +132,21 @@ export function ChatTopbar({
           </div>
         </div>
         <div className={controlsContainerClass}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onOpenSidebar}
+            className={cn(
+              "flex items-center gap-1 rounded-full border border-white/40 bg-white/70 px-3 py-1.5 text-sm font-medium text-slate-600 hover:border-white/70 hover:bg-white/90 hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-300 dark:hover:bg-slate-800/70 dark:hover:text-white",
+              isPixel && "pixel-control rounded-full px-3 py-1 text-xs text-slate-700 dark:text-slate-200",
+              "lg:hidden",
+            )}
+            aria-label="Open navigation"
+          >
+            <Menu className="h-4 w-4" />
+            <span className={cn(isPixel && "text-[0.75rem] tracking-[0.08em]")}>Menu</span>
+          </Button>
           <Badge
             variant="secondary"
             className={cn(
