@@ -124,7 +124,7 @@ export function ChatTopbar({
             <p
               className={cn(
                 "text-sm text-slate-500 dark:text-slate-400",
-                isPixel && "pixel-subheading text-[0.7rem] leading-relaxed text-slate-600 dark:text-slate-300 sm:text-[0.75rem]",
+                isPixel && "pixel-subheading leading-relaxed text-slate-600 dark:text-slate-300",
               )}
             >
               {modeMeta.description}
