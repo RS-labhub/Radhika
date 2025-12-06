@@ -2,15 +2,30 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 
+type Mode = "general" | "productivity" | "wellness" | "learning" | "creative" | "bff";
+
+// Browser TTS settings per mode
+const MODE_BROWSER_TTS_SETTINGS: Record<Mode, { rate: number; pitch: number; volume: number }> = {
+  general: { rate: 0.95, pitch: 1.05, volume: 0.9 },
+  productivity: { rate: 1.0, pitch: 1.0, volume: 0.9 },      // Clear, professional
+  wellness: { rate: 0.85, pitch: 1.0, volume: 0.85 },        // Calm, soothing, slower
+  learning: { rate: 0.90, pitch: 1.0, volume: 0.9 },         // Clear, moderate pace for comprehension
+  creative: { rate: 0.95, pitch: 1.1, volume: 0.9 },         // Expressive, dynamic
+  bff: { rate: 1.0, pitch: 1.15, volume: 0.95 },             // Energetic, fun
+};
+
 export function useSpeech() {
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentMessageId, setCurrentMessageId] = useState<string | null>(null);
 
   const recognitionRef = useRef<any>(null);
   const synthesisRef = useRef<SpeechSynthesis | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const onTranscriptRef = useRef<((transcript: string) => void) | null>(null);
+  const useFallbackRef = useRef(false);
 
   // Initialize speech recognition and synthesis
   useEffect(() => {
@@ -47,119 +62,175 @@ export function useSpeech() {
       setError("Speech recognition is not supported in your browser.");
     }
 
-    // Speech Synthesis
+    // Speech Synthesis (fallback)
     if ("speechSynthesis" in window) {
       synthesisRef.current = window.speechSynthesis;
-
-      // Force voice preload
       window.speechSynthesis.getVoices();
-    } else {
-      setError("Speech synthesis is not supported in your browser.");
     }
+
+    // Cleanup audio on unmount
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
   }, []);
 
-  const speakMessage = useCallback((text: string) => {
+  // Fallback browser TTS
+  const speakWithBrowserTTS = useCallback((text: string, mode: Mode = "general") => {
     const synthesis = synthesisRef.current;
     if (!synthesis) {
       setError("Speech synthesis is not available.");
       return;
     }
 
-    // Cancel ongoing speech
     synthesis.cancel();
 
-    // Clean text
-    const cleanedText = text.replace(
-      /[\p{Emoji_Presentation}\p{Emoji}\u200D]+/gu,
-      ""
-    ).trim();
+    const cleanedText = text
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/https?:\/\/[^\s]+/g, "")
+      .replace(/[*_~`#]+/g, "")
+      .replace(/```[\s\S]*?```/g, "")
+      .replace(/`[^`]+`/g, "")
+      .replace(/[\p{Emoji_Presentation}\p{Emoji}\u200D]+/gu, "")
+      .replace(/\s+/g, " ")
+      .trim();
 
-    if (!cleanedText) {
-      // console.warn("Skipping empty or emoji-only speech input.");
-      return;
+    if (!cleanedText) return;
+
+    const settings = MODE_BROWSER_TTS_SETTINGS[mode] || MODE_BROWSER_TTS_SETTINGS.general;
+    const utterance = new SpeechSynthesisUtterance(cleanedText);
+    utterance.rate = settings.rate;
+    utterance.pitch = settings.pitch;
+    utterance.volume = settings.volume;
+
+    const voices = synthesis.getVoices();
+    const femaleVoice = voices.find(v => 
+      v.lang.startsWith("en") && 
+      (v.name.toLowerCase().includes("female") || 
+       v.name.toLowerCase().includes("samantha") ||
+       v.name.toLowerCase().includes("zira"))
+    ) ?? voices.find(v => v.lang.startsWith("en")) ?? voices[0];
+
+    if (femaleVoice) {
+      utterance.voice = femaleVoice;
     }
 
-    const utterance = new SpeechSynthesisUtterance(cleanedText);
-    utterance.rate = 1.2;
-    utterance.pitch = 1.2;
-    utterance.volume = 0.8;
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      setCurrentMessageId(null);
+    };
+    utterance.onerror = () => {
+      setIsSpeaking(false);
+      setCurrentMessageId(null);
+    };
 
-    const selectVoice = () => {
-      const voices = synthesis.getVoices();
+    synthesis.speak(utterance);
+  }, []);
 
-      // Detect language
-      const isHindiScript = /[\u0900-\u097F]/.test(cleanedText);
-      const isHinglish = /\b(mera|tum|kya|hai|nahi|kaise|acha|haan|kyun|main|sab|pyaar|dil|kaisi|batao|suno|aise|vaise|ni|nhi|achaa|baat|mujhe|tumhe|kon|kahan)\b/i.test(cleanedText);
-      const isHindi = isHindiScript || isHinglish;
-      const isEnglish = /^[a-zA-Z0-9\s,.!?'-]+$/.test(cleanedText);
+  // ElevenLabs TTS
+  const speakWithElevenLabs = useCallback(async (text: string, mode: Mode = "general"): Promise<boolean> => {
+    try {
+      const response = await fetch("/api/speech", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, mode }),
+      });
 
-      // Helper: filter for GenZ/teen girl voices
-      const genzGirlKeywords = [
-        "teen", "girl", "young", "genz", "zira", "samantha", "female", "woman", "google uk english female", "google hindi", "maya", "swara", "padma", "kajal", "karen", "anya", "natasha", "neha", "raveena", "soni", "priya"
-      ];
-
-      let selectedVoice: SpeechSynthesisVoice | null = null;
-
-      if (isHindi) {
-        // Prefer Google Hindi or young Indian female voices
-        selectedVoice = voices.find(v => v.lang === "hi-IN" && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
-          ?? voices.find(v => v.lang === "hi-IN")
-          ?? voices.find(v => v.lang === "en-IN" && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
-          ?? voices.find(v => v.lang === "en-IN")
-          ?? voices.find(v => genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
-          ?? voices.find(v => v.lang.startsWith("en"))
-          ?? null;
-        utterance.lang = "hi-IN";
-      } else if (isEnglish) {
-        // Prefer young/teen/GenZ/female English voices
-        selectedVoice = voices.find(v => v.lang.startsWith("en") && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
-          ?? voices.find(v => v.lang === "en-GB" && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
-          ?? voices.find(v => v.lang === "en-US" && genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
-          // No gender property in SpeechSynthesisVoice, rely on name/language only
-          ?? voices.find(v => v.lang.startsWith("en"))
-          ?? voices.find(v => genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
-          ?? null;
-        utterance.lang = "en-US";
-      } else {
-        // Fallback: try to match language, prefer female
-        selectedVoice = voices.find(v => genzGirlKeywords.some(k => v.name.toLowerCase().includes(k)))
-          // No gender property in SpeechSynthesisVoice, rely on name/language only
-          ?? voices.find(v => v.lang.startsWith("en"))
-          ?? voices[0] ?? null;
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        if (errorData.fallback) {
+          console.warn("ElevenLabs unavailable, using fallback TTS");
+          useFallbackRef.current = true;
+          return false;
+        }
+        throw new Error(errorData.error || "Speech API error");
       }
 
-      if (selectedVoice) {
-        utterance.voice = selectedVoice;
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      // Stop any existing audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        URL.revokeObjectURL(audioRef.current.src);
       }
 
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = (event) => {
-        console.error("Speech synthesis error:", event);
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+
+      audio.onplay = () => setIsSpeaking(true);
+      audio.onended = () => {
+        setIsSpeaking(false);
+        setCurrentMessageId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        setCurrentMessageId(null);
+        URL.revokeObjectURL(audioUrl);
+      };
+      audio.onpause = () => {
         setIsSpeaking(false);
       };
 
-      synthesis.speak(utterance);
-    };
-
-    // Handle delay if voices aren't available yet
-    if (synthesis.getVoices().length === 0) {
-      const handleVoicesChanged = () => {
-        selectVoice();
-        synthesis.removeEventListener("voiceschanged", handleVoicesChanged);
-      };
-      synthesis.addEventListener("voiceschanged", handleVoicesChanged);
-    } else {
-      selectVoice();
+      await audio.play();
+      return true;
+    } catch (err) {
+      console.error("ElevenLabs TTS error:", err);
+      return false;
     }
   }, []);
 
+  // Main speak function - tries ElevenLabs first, falls back to browser TTS
+  const speakMessage = useCallback(async (text: string, messageId?: string, mode: Mode = "general") => {
+    if (!text) return;
+
+    // Stop any ongoing speech
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    if (synthesisRef.current) {
+      synthesisRef.current.cancel();
+    }
+
+    if (messageId) {
+      setCurrentMessageId(messageId);
+    }
+
+    // If we've already determined ElevenLabs is unavailable, use fallback immediately
+    if (useFallbackRef.current) {
+      speakWithBrowserTTS(text, mode);
+      return;
+    }
+
+    // Try ElevenLabs first
+    const success = await speakWithElevenLabs(text, mode);
+    
+    // If ElevenLabs failed, use browser fallback
+    if (!success) {
+      speakWithBrowserTTS(text, mode);
+    }
+  }, [speakWithElevenLabs, speakWithBrowserTTS]);
+
   const stopSpeaking = useCallback(() => {
+    // Stop ElevenLabs audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+
+    // Stop browser TTS
     const synthesis = synthesisRef.current;
     if (synthesis) {
       synthesis.cancel();
-      setIsSpeaking(false);
     }
+
+    setIsSpeaking(false);
+    setCurrentMessageId(null);
   }, []);
 
   const startListening = useCallback(
@@ -195,6 +266,7 @@ export function useSpeech() {
     isSpeaking,
     voiceEnabled,
     error,
+    currentMessageId,
     setVoiceEnabled,
     speakMessage,
     stopSpeaking,

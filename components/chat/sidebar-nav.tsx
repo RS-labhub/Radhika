@@ -4,8 +4,8 @@ import { Fragment } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { Mode, ModeDefinition, UIStyle } from "@/types/chat"
-import { Settings, X } from "lucide-react"
+import type { Mode, ModeDefinition, UIStyle, UserPersonalization } from "@/types/chat"
+import { Settings, X, UserCircle } from "lucide-react"
 
 interface SidebarNavProps {
   mode: Mode
@@ -17,11 +17,13 @@ interface SidebarNavProps {
   uiStyle: UIStyle
   onDismiss?: () => void
   onOpenSettings?: () => void
+  onOpenPersonalization?: () => void
+  userPersonalization?: UserPersonalization
   showQuickActions?: boolean
   showCloseButton?: boolean
 }
 
-export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAction, modeCounts, uiStyle, onDismiss, onOpenSettings, showQuickActions = true, showCloseButton = false }: SidebarNavProps) {
+export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAction, modeCounts, uiStyle, onDismiss, onOpenSettings, onOpenPersonalization, userPersonalization, showQuickActions = true, showCloseButton = false }: SidebarNavProps) {
   const isPixel = uiStyle === "pixel"
 
   const wrapperClass = cn(
@@ -102,23 +104,43 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className={sectionTitleClass}>Modes</h2>
-          {onOpenSettings && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={onOpenSettings}
-              className={cn(
-                "h-7 w-7",
-                isPixel
-                  ? "pixel-control text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
-                  : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
-              )}
-              aria-label="Manage API Keys"
-            >
-              <Settings className="h-4 w-4" />
-            </Button>
-          )}
+          <div className="flex items-center gap-1">
+            {onOpenPersonalization && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={onOpenPersonalization}
+                className={cn(
+                  "h-7 w-7",
+                  isPixel
+                    ? "pixel-control text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                    : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
+                )}
+                aria-label="Personalize"
+                title={userPersonalization ? `${userPersonalization.gender === "boy" ? "👦" : userPersonalization.gender === "girl" ? "👧" : "🧑"} ${userPersonalization.age}` : "Personalize"}
+              >
+                <UserCircle className="h-4 w-4" />
+              </Button>
+            )}
+            {onOpenSettings && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={onOpenSettings}
+                className={cn(
+                  "h-7 w-7",
+                  isPixel
+                    ? "pixel-control text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                    : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
+                )}
+                aria-label="Manage API Keys"
+              >
+                <Settings className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
         </div>
         <div className="grid gap-2">
           {Object.entries(modes).map(([key, meta]) => {

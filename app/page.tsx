@@ -26,11 +26,12 @@ import { ActivityMatrix } from "@/components/activity-matrix"
 import { ApiKeyDialog } from "@/components/dialog/api-key-dialog"
 import { SettingsDialog } from "@/components/dialog/settings-dialog"
 import { ImageSettingsDialog } from "@/components/dialog/image-settings-dialog"
+import { PersonalizationDialog } from "@/components/dialog/personalization-dialog"
 import { CodeBlock } from "@/components/chat/code-block"
 import { GeneratedImage } from "@/components/chat/generated-image"
 import { useSpeech } from "@/hooks/use-speech"
 
-import type { KeyProvider, KeyProviderMetadata, Mode, ModeDefinition, Provider, ProviderDefinition, UIStyle } from "@/types/chat"
+import type { KeyProvider, KeyProviderMetadata, Mode, ModeDefinition, Provider, ProviderDefinition, UIStyle, UserGender, UserAge, UserPersonalization } from "@/types/chat"
 import type { ImageProviderId, ImageSettings } from "@/types/image"
 import { IMAGE_PROVIDERS, DEFAULT_IMAGE_PROVIDER } from "@/lib/image-providers"
 import { truncate } from "fs"
@@ -189,6 +190,7 @@ type ApiKeyMap = {
 
 const IMAGE_SETTINGS_STORAGE_KEY = "radhika-image-settings"
 const LEGACY_IMAGE_PROVIDER_KEYS_STORAGE_KEY = "radhika-image-provider-keys"
+const PERSONALIZATION_STORAGE_KEY = "radhika-personalization"
 
 const createDefaultImageSettings = (providerId: ImageProviderId = DEFAULT_IMAGE_PROVIDER): ImageSettings => {
   const providerMeta = IMAGE_PROVIDERS[providerId]
@@ -257,7 +259,7 @@ const sanitizeImageSettings = (raw: Partial<ImageSettings> | null | undefined): 
 
 export default function FuturisticRadhika() {
   const [mode, setMode] = useState<Mode>("general")
-  const [provider, setProvider] = useState<Provider>("groq")
+  const [provider, setProvider] = useState<Provider>("gemini")
   const [darkMode, setDarkMode] = useState(false)
   const [uiStyle, setUIStyle] = useState<UIStyle>("modern")
   const [error, setError] = useState<string | null>(null)
@@ -272,6 +274,13 @@ export default function FuturisticRadhika() {
   const [imageSettings, setImageSettings] = useState<ImageSettings>(() => createDefaultImageSettings())
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const [isChatLoading, setIsChatLoading] = useState(false)
+
+  // User personalization settings
+  const [userPersonalization, setUserPersonalization] = useState<UserPersonalization>({
+    gender: "boy",
+    age: "teenage",
+  })
+  const [isPersonalizationDialogOpen, setIsPersonalizationDialogOpen] = useState(false)
 
   const [apiKeys, setApiKeys] = useState<ApiKeyMap>(() => ({
     openai: "",
@@ -301,7 +310,12 @@ export default function FuturisticRadhika() {
     startListening,
     error: speechError,
     clearError: clearSpeechError,
+    currentMessageId,
   } = useSpeech()
+
+  // Ref to always have the latest voiceEnabled value in callbacks
+  const voiceEnabledRef = useRef(voiceEnabled)
+  voiceEnabledRef.current = voiceEnabled
 
   const currentApiKey = useMemo(() => {
     if (!PROVIDERS[provider].requiresApiKey) return ""
@@ -316,6 +330,8 @@ export default function FuturisticRadhika() {
       body: {
         mode,
         provider,
+        userGender: userPersonalization.gender,
+        userAge: userPersonalization.age,
         ...(currentApiKey ? { apiKey: currentApiKey } : {}),
       },
       onError: (incomingError: Error) => {
@@ -329,12 +345,12 @@ export default function FuturisticRadhika() {
       },
       onFinish: (message: any) => {
         setError(null)
-        if (voiceEnabled && message?.content) {
-          speakMessage(message.content)
+        if (voiceEnabledRef.current && message?.content) {
+          speakMessage(message.content, undefined, mode)
         }
       },
     }),
-    [mode, provider, currentApiKey, voiceEnabled, speakMessage],
+    [mode, provider, currentApiKey, speakMessage, userPersonalization],
   )
 
   const chatHelpers: any = useChat(chatConfig)
@@ -473,6 +489,21 @@ export default function FuturisticRadhika() {
       }
     }
 
+    // Load personalization settings
+    const savedPersonalization = localStorage.getItem(PERSONALIZATION_STORAGE_KEY)
+    if (savedPersonalization) {
+      try {
+        const parsed = JSON.parse(savedPersonalization) as Partial<UserPersonalization>
+        if (parsed) {
+          setUserPersonalization((prev) => ({
+            gender: parsed.gender && ["boy", "girl", "other"].includes(parsed.gender) ? parsed.gender : prev.gender,
+            age: parsed.age && ["kid", "teenage", "mature", "senior"].includes(parsed.age) ? parsed.age : prev.age,
+          }))
+        }
+      } catch (parseError) {
+        console.error("Failed to parse saved personalization settings", parseError)
+      }
+    }
   }, [])
 
   useEffect(() => {
@@ -482,6 +513,13 @@ export default function FuturisticRadhika() {
       JSON.stringify({ enabled: imageGenerationEnabled, settings: imageSettings }),
     )
   }, [imageGenerationEnabled, imageSettings])
+
+  // Save personalization settings to localStorage
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    localStorage.setItem(PERSONALIZATION_STORAGE_KEY, JSON.stringify(userPersonalization))
+  }, [userPersonalization])
+
   const combinedError = error || speechError
 
   useEffect(() => {
@@ -712,40 +750,51 @@ export default function FuturisticRadhika() {
       // Auto-detect image generation keywords and patterns
       const lowerPrompt = promptText.toLowerCase()
       
-      // Direct action keywords
+      // Direct action keywords - these must be explicit about image generation
       const actionKeywords = [
         'generate image',
         'create image',
         'make image',
-        'draw',
+        'generate an image',
+        'create an image',
+        'make an image',
+        'draw an image',
+        'draw a picture',
+        'draw me',
         'generate picture',
         'create picture',
         'make picture',
+        'generate a picture',
+        'create a picture',
+        'make a picture',
         'generate photo',
         'create photo',
         'make photo',
-        'show me image',
-        'show me picture',
-        'show me photo',
-        'visualize',
-        'illustrate',
-        'design image',
-        'produce image',
-        'render image',
-        'paint',
-        'sketch'
+        'generate a photo',
+        'create a photo',
+        'make a photo',
+        'show me an image',
+        'show me a picture',
+        'show me a photo',
+        'design an image',
+        'produce an image',
+        'render an image',
+        'paint a picture',
+        'paint an image',
+        'sketch a picture',
+        'sketch an image',
+        'illustrate this',
+        'visualize this',
       ]
       
       // Descriptive patterns that indicate image generation intent
       const descriptivePatterns = [
-        /image of (a|an|the|it|that|this)/i,
-        /picture of (a|an|the|it|that|this)/i,
-        /photo of (a|an|the|it|that|this)/i,
+        /^image of (a|an|the)/i,  // Must start with "image of"
+        /^picture of (a|an|the)/i,
+        /^photo of (a|an|the)/i,
         /\[image:/i,  // Markdown-style image descriptions
-        /(draw|paint|create|generate|make|show|visualize).*(image|picture|photo|art)/i,
-        // Contextual references - when user refers to something previously discussed
-        /(generate|create|make|show|draw|paint).+(it|that|this)/i,
-        /(image|picture|photo).+(it|that|this)/i,
+        /^(draw|paint|sketch|illustrate|visualize)\s+(a|an|the|me)\s/i,  // Must start with art action
+        /(generate|create|make)\s+(a|an|the)?\s*(image|picture|photo|artwork|illustration)\s+(of|showing|depicting)/i,
       ]
       
       const hasActionKeyword = actionKeywords.some(keyword => lowerPrompt.includes(keyword))
@@ -1001,7 +1050,10 @@ export default function FuturisticRadhika() {
           throw new Error('No response received from AI')
         }
         
-        console.log('✅ Chat message completed successfully')
+        // Auto-speak the response if voice is enabled
+        if (voiceEnabledRef.current && accumulatedContent) {
+          speakMessage(accumulatedContent, undefined, mode)
+        }
     } catch (error) {
       console.error('❌ Chat error:', error)
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
@@ -1025,7 +1077,7 @@ export default function FuturisticRadhika() {
     } finally {
       setIsChatLoading(false)
     }
-  }, [mode, provider, currentApiKey, setMessages])
+  }, [mode, provider, currentApiKey, setMessages, speakMessage])
 
   const currentMode = useMemo(() => MODES[mode], [mode])
   const providerLabel = useMemo(() => PROVIDERS[provider].name, [provider])
@@ -1212,6 +1264,38 @@ export default function FuturisticRadhika() {
           {children}
         </a>
       ),
+      table: ({ children }) => (
+        <div className="my-3 overflow-x-auto">
+          <table className={`min-w-full border-collapse text-sm ${uiStyle === "pixel" ? "pixel-font text-xs" : ""}`}>
+            {children}
+          </table>
+        </div>
+      ),
+      thead: ({ children }) => (
+        <thead className="bg-slate-100 dark:bg-slate-800">
+          {children}
+        </thead>
+      ),
+      tbody: ({ children }) => (
+        <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+          {children}
+        </tbody>
+      ),
+      tr: ({ children }) => (
+        <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+          {children}
+        </tr>
+      ),
+      th: ({ children }) => (
+        <th className="border border-slate-300 dark:border-slate-600 px-3 py-2 text-left font-semibold text-slate-900 dark:text-slate-100">
+          {children}
+        </th>
+      ),
+      td: ({ children }) => (
+        <td className="border border-slate-300 dark:border-slate-600 px-3 py-2 text-slate-700 dark:text-slate-300">
+          {children}
+        </td>
+      ),
     }),
     [uiStyle],
   )
@@ -1245,6 +1329,8 @@ export default function FuturisticRadhika() {
           uiStyle={uiStyle}
           onDismiss={() => setNavigationOpen(false)}
           onOpenSettings={handleOpenSettings}
+          onOpenPersonalization={() => setIsPersonalizationDialogOpen(true)}
+          userPersonalization={userPersonalization}
           showCloseButton
           showQuickActions={false}
         />
@@ -1262,6 +1348,8 @@ export default function FuturisticRadhika() {
             modeCounts={modeCounts}
             uiStyle={uiStyle}
             onOpenSettings={handleOpenSettings}
+            onOpenPersonalization={() => setIsPersonalizationDialogOpen(true)}
+            userPersonalization={userPersonalization}
           />
         }
         topbar={
@@ -1304,6 +1392,10 @@ export default function FuturisticRadhika() {
           onQuickAction={handleQuickAction}
           mode={mode}
           onImageRetry={handleImageRetry}
+          isSpeaking={isSpeaking}
+          currentSpeakingMessageId={currentMessageId}
+          onSpeakMessage={speakMessage}
+          onStopSpeaking={stopSpeaking}
         />
         <ChatComposer
           input={input}
@@ -1373,6 +1465,14 @@ export default function FuturisticRadhika() {
                 ? Boolean(apiKeys.huggingface)
                 : false
         }
+        uiStyle={uiStyle}
+      />
+
+      <PersonalizationDialog
+        open={isPersonalizationDialogOpen}
+        onOpenChange={setIsPersonalizationDialogOpen}
+        personalization={userPersonalization}
+        onSave={setUserPersonalization}
         uiStyle={uiStyle}
       />
 

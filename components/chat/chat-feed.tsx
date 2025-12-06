@@ -1,11 +1,13 @@
 "use client"
 
 import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import type { Components } from "react-markdown"
 import { cn } from "@/lib/utils"
 import { AIVisualization } from "@/components/ai-visualization"
-import { User } from "lucide-react"
+import { User, Volume2, VolumeX } from "lucide-react"
 import type { Mode, ModeDefinition, UIStyle } from "@/types/chat"
+import { Button } from "@/components/ui/button"
 
 type MessageContent = string | Array<{ type?: string; text?: string; value?: string } | string>
 
@@ -29,6 +31,11 @@ interface ChatFeedProps {
   onQuickAction: (action: string) => void
   mode: Mode
   onImageRetry?: (messageId: string) => void
+  // Speech props
+  isSpeaking?: boolean
+  currentSpeakingMessageId?: string | null
+  onSpeakMessage?: (text: string, messageId: string, mode: Mode) => void
+  onStopSpeaking?: () => void
 }
 
 export function ChatFeed({
@@ -44,6 +51,10 @@ export function ChatFeed({
   onQuickAction,
   mode,
   onImageRetry,
+  isSpeaking,
+  currentSpeakingMessageId,
+  onSpeakMessage,
+  onStopSpeaking,
 }: ChatFeedProps) {
   const isPixel = uiStyle === "pixel"
   const CurrentModeIcon = currentMode.icon
@@ -179,6 +190,7 @@ export function ChatFeed({
                       ) : (
                         <div className="prose prose-sm max-w-none break-words dark:prose-invert [&_*]:break-words [&_pre]:whitespace-pre-wrap [&_code]:break-words" style={markdownStyle}>
                           <ReactMarkdown 
+                            remarkPlugins={[remarkGfm]}
                             components={{
                               ...MarkdownComponents,
                               img: ({ src, alt }) => {
@@ -220,15 +232,49 @@ export function ChatFeed({
                         </div>
                       )}
                     </div>
-                    <p
+                    <div
                       className={cn(
-                        "mt-1 text-[11px] uppercase tracking-[0.24em] text-slate-400",
-                        isPixel && "pixel-label text-[0.6rem] tracking-[0.3em] text-slate-400 dark:text-slate-500",
-                        isUser ? "text-right" : "text-left",
+                        "mt-1 flex items-center gap-2",
+                        isUser ? "justify-end" : "justify-start",
                       )}
                     >
-                      {formatTime(timestamp)}
-                    </p>
+                      <p
+                        className={cn(
+                          "text-[11px] uppercase tracking-[0.24em] text-slate-400",
+                          isPixel && "pixel-label text-[0.6rem] tracking-[0.3em] text-slate-400 dark:text-slate-500",
+                        )}
+                      >
+                        {formatTime(timestamp)}
+                      </p>
+                      {!isUser && onSpeakMessage && onStopSpeaking && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
+                            if (isSpeaking && currentSpeakingMessageId === message.id) {
+                              onStopSpeaking()
+                            } else {
+                              onSpeakMessage(normalizedContent, message.id, mode)
+                            }
+                          }}
+                          className={cn(
+                            "h-6 w-6 p-0",
+                            isPixel
+                              ? "pixel-control text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                              : "rounded-full text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300",
+                            isSpeaking && currentSpeakingMessageId === message.id && "text-cyan-500 dark:text-cyan-400"
+                          )}
+                          aria-label={isSpeaking && currentSpeakingMessageId === message.id ? "Stop speaking" : "Listen to message"}
+                        >
+                          {isSpeaking && currentSpeakingMessageId === message.id ? (
+                            <VolumeX className="h-3.5 w-3.5" />
+                          ) : (
+                            <Volume2 className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   {isUser && (
                     <div
