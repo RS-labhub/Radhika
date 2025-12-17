@@ -45,7 +45,9 @@ const BreadcrumbLink = React.forwardRef<
     asChild?: boolean
   }
 >(({ asChild, className, ...props }, ref) => {
-  const Comp = asChild ? Slot : "a"
+  // Radix Slot's types can conflict with React/CSSProperties when multiple csstype versions exist.
+  // Casting here keeps runtime behavior identical while unblocking typechecking.
+  const Comp = (asChild ? Slot : "a") as React.ElementType
 
   return (
     <Comp

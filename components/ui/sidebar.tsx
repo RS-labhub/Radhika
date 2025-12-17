@@ -202,7 +202,7 @@ const Sidebar = React.forwardRef<
             style={
               {
                 "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
-              } as React.CSSProperties
+              } as any
             }
             side={side}
           >
@@ -432,7 +432,9 @@ const SidebarGroupLabel = React.forwardRef<
   HTMLDivElement,
   React.ComponentProps<"div"> & { asChild?: boolean }
 >(({ className, asChild = false, ...props }, ref) => {
-  const Comp = asChild ? Slot : "div"
+  // Radix Slot's types can conflict with React/CSSProperties when multiple csstype versions exist.
+  // Casting keeps runtime behavior identical while unblocking typechecking.
+  const Comp = (asChild ? Slot : "div") as React.ElementType
 
   return (
     <Comp
@@ -453,7 +455,7 @@ const SidebarGroupAction = React.forwardRef<
   HTMLButtonElement,
   React.ComponentProps<"button"> & { asChild?: boolean }
 >(({ className, asChild = false, ...props }, ref) => {
-  const Comp = asChild ? Slot : "button"
+  const Comp = (asChild ? Slot : "button") as React.ElementType
 
   return (
     <Comp
@@ -553,7 +555,7 @@ const SidebarMenuButton = React.forwardRef<
     },
     ref
   ) => {
-    const Comp = asChild ? Slot : "button"
+  const Comp = (asChild ? Slot : "button") as React.ElementType
     const { isMobile, state } = useSidebar()
 
     const button = (
@@ -599,7 +601,7 @@ const SidebarMenuAction = React.forwardRef<
     showOnHover?: boolean
   }
 >(({ className, asChild = false, showOnHover = false, ...props }, ref) => {
-  const Comp = asChild ? Slot : "button"
+  const Comp = (asChild ? Slot : "button") as React.ElementType
 
   return (
     <Comp
@@ -713,7 +715,7 @@ const SidebarMenuSubButton = React.forwardRef<
     isActive?: boolean
   }
 >(({ asChild = false, size = "md", isActive, className, ...props }, ref) => {
-  const Comp = asChild ? Slot : "a"
+  const Comp = (asChild ? Slot : "a") as React.ElementType
 
   return (
     <Comp

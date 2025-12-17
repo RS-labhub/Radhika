@@ -1,11 +1,12 @@
 "use client"
 
 import { Fragment } from "react"
+import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import type { Mode, ModeDefinition, UIStyle, UserPersonalization } from "@/types/chat"
-import { Settings, X, UserCircle } from "lucide-react"
+import type { KeyProvider, Mode, ModeDefinition, UIStyle, UserPersonalization } from "@/types/chat"
+import { Settings, X, UserCircle, Activity, PlusCircle, History, Key } from "lucide-react"
 
 interface SidebarNavProps {
   mode: Mode
@@ -18,12 +19,28 @@ interface SidebarNavProps {
   onDismiss?: () => void
   onOpenSettings?: () => void
   onOpenPersonalization?: () => void
+  onOpenApiKeys?: (provider: KeyProvider) => void
+  apiKeyProvider?: KeyProvider
   userPersonalization?: UserPersonalization
+  isAuthenticated?: boolean
   showQuickActions?: boolean
   showCloseButton?: boolean
+  allowedModes?: Mode[]
+  modeCta?: {
+    label: string
+    href: string
+    description?: string
+  }
+  showHeatmapToggle?: boolean
+  heatmapOpen?: boolean
+  onToggleHeatmap?: () => void
+  onNewChat?: () => void
+  showHistoryToggle?: boolean
+  historyOpen?: boolean
+  onToggleHistory?: () => void
 }
 
-export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAction, modeCounts, uiStyle, onDismiss, onOpenSettings, onOpenPersonalization, userPersonalization, showQuickActions = true, showCloseButton = false }: SidebarNavProps) {
+export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAction, modeCounts, uiStyle, onDismiss, onOpenSettings, onOpenPersonalization, onOpenApiKeys, apiKeyProvider = "openai", userPersonalization, isAuthenticated = false, showQuickActions = true, showCloseButton = false, allowedModes, modeCta, showHeatmapToggle = false, heatmapOpen = false, onToggleHeatmap, onNewChat, showHistoryToggle = false, historyOpen = false, onToggleHistory }: SidebarNavProps) {
   const isPixel = uiStyle === "pixel"
 
   const wrapperClass = cn(
@@ -71,7 +88,7 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
                 isPixel && "pixel-badge",
               )}
             >
-              v2.0
+              v3.0
             </Badge>
             {showCloseButton && onDismiss ? (
               <Button
@@ -105,6 +122,59 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
         <div className="flex items-center justify-between">
           <h2 className={sectionTitleClass}>Modes</h2>
           <div className="flex items-center gap-1">
+            {showHistoryToggle ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={onToggleHistory}
+                className={cn(
+                  "h-7 w-7",
+                  isPixel
+                    ? "pixel-control text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                    : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
+                )}
+                aria-pressed={historyOpen}
+                aria-label={historyOpen ? "Hide chat history" : "Show chat history"}
+              >
+                <History className="h-4 w-4" />
+              </Button>
+            ) : null}
+            {showHeatmapToggle ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={onToggleHeatmap}
+                className={cn(
+                  "h-7 w-7",
+                  isPixel
+                    ? "pixel-control text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                    : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
+                )}
+                aria-pressed={heatmapOpen}
+                aria-label={heatmapOpen ? "Hide conversation heatmap" : "Show conversation heatmap"}
+              >
+                <Activity className="h-4 w-4" />
+              </Button>
+            ) : null}
+            {!isAuthenticated && onOpenApiKeys ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => onOpenApiKeys(apiKeyProvider)}
+                className={cn(
+                  "h-7 w-7",
+                  isPixel
+                    ? "pixel-control text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                    : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
+                )}
+                aria-label="Add API key"
+              >
+                <Key className="h-4 w-4" />
+              </Button>
+            ) : null}
             {onOpenPersonalization && (
               <Button
                 type="button"
@@ -142,15 +212,33 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
             )}
           </div>
         </div>
+        
+        {/* New Chat button */}
+        {onNewChat && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onNewChat}
+            className={cn(
+              "w-full gap-2",
+              isPixel
+                ? "pixel-tile text-xs font-medium text-slate-700 dark:text-slate-200"
+                : "rounded-xl border-dashed border-slate-300 bg-transparent text-sm text-slate-600 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:bg-slate-800/50"
+            )}
+          >
+            <PlusCircle className="h-4 w-4" />
+            New Chat
+          </Button>
+        )}
         <div className="grid gap-2">
-          {Object.entries(modes).map(([key, meta]) => {
-            const castKey = key as Mode
+          {(allowedModes && allowedModes.length > 0 ? allowedModes : (Object.keys(modes) as Mode[])).map((castKey) => {
+            const meta = modes[castKey]
             const ModeIcon = meta.icon
             const isActive = castKey === mode
 
             return (
               <button
-                key={key}
+                key={castKey}
                 type="button"
                 onClick={() => {
                   onModeChange(castKey)
@@ -211,6 +299,33 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
           })}
         </div>
       </div>
+
+      {modeCta ? (
+        <div
+          className={cn(
+            "rounded-[28px] border px-4 py-5 text-center",
+            isPixel
+              ? "pixel-tile border-cyan-500/60 bg-white/85 text-slate-700 dark:border-cyan-500/40 dark:bg-slate-900/75 dark:text-slate-100"
+              : "border-cyan-100 bg-gradient-to-br from-cyan-50 via-white to-blue-50 text-slate-700 shadow-[0_20px_55px_-30px_rgba(14,165,233,0.8)] dark:border-cyan-500/30 dark:from-slate-900 dark:via-slate-900/70 dark:to-slate-900/60 dark:text-slate-100",
+          )}
+        >
+          <p className={cn("text-xs font-semibold uppercase tracking-[0.25em] text-cyan-600", isPixel && "pixel-label text-[0.6rem]")}>Unlock more</p>
+          <p className={cn("mt-2 text-sm font-medium leading-relaxed whitespace-normal break-words", isPixel && "pixel-subheading text-[0.78rem]")}>{modeCta.description ?? "Sign up to unlock Productivity, Wellness, Creative, and more."}</p>
+          <Button
+            type="button"
+            size="sm"
+            className={cn(
+              "mt-4 w-full rounded-full text-sm shadow-lg",
+              isPixel
+                ? "pixel-control border border-cyan-500 text-cyan-600 hover:text-cyan-700 dark:text-cyan-300"
+                : "bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:opacity-90",
+            )}
+            asChild
+          >
+        <Link href={modeCta.href} className="w-full inline-flex items-center justify-center text-center !whitespace-normal break-words px-4 py-3 !h-auto">{modeCta.label}</Link>
+          </Button>
+        </div>
+      ) : null}
 
       {showQuickActions ? (
         <div className="mt-auto space-y-3">

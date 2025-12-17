@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { checkRateLimit, getRateLimitHeaders } from "@/lib/rate-limit";
+import { createServerSupabaseClient } from "@/lib/supabase/server";
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const VOICE_ID = "7cETWFmFhbuQzaSKPpec";
@@ -48,6 +50,33 @@ const MODE_VOICE_SETTINGS: Record<Mode, { stability: number; similarity_boost: n
 
 export async function POST(req: NextRequest) {
   try {
+    // Check authentication and rate limiting
+    const supabase = await createServerSupabaseClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    // Get identifier for rate limiting (user ID or IP)
+    const identifier = user?.id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous";
+    const isAuthenticated = !!user;
+
+    // Check rate limit
+    const rateLimitResult = await checkRateLimit(identifier, "speech", isAuthenticated);
+    
+    if (!rateLimitResult.allowed) {
+      const headers = getRateLimitHeaders(
+        rateLimitResult.remaining,
+        rateLimitResult.resetAt,
+        rateLimitResult.limit
+      );
+      return NextResponse.json(
+        { 
+          error: "Rate limit exceeded. Please wait before using speech again.",
+          resetAt: rateLimitResult.resetAt.toISOString(),
+          isGuest: !isAuthenticated
+        },
+        { status: 429, headers }
+      );
+    }
+
     const { text, mode = "general" } = await req.json();
 
     if (!text || typeof text !== "string") {

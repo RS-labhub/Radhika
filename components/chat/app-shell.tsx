@@ -11,9 +11,17 @@ interface ChatAppShellProps {
   insights?: ReactNode
   mobileSidebar?: ReactNode
   isPixel: boolean
+  hasInsights?: boolean
 }
 
-export function ChatAppShell({ sidebar, topbar, children, insights, mobileSidebar, isPixel }: ChatAppShellProps) {
+export function ChatAppShell({ sidebar, topbar, children, insights, mobileSidebar, isPixel, hasInsights = false }: ChatAppShellProps) {
+  const gridClass = cn(
+    "grid flex-1 gap-6",
+    hasInsights
+      ? "lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_320px]"
+      : "lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]",
+  )
+
   return (
     <div className="relative min-h-screen w-full overflow-hidden">
       <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.25),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(139,92,246,0.18),_transparent_55%),linear-gradient(120deg,_rgba(15,23,42,0.08),_rgba(15,23,42,0.02))] dark:bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.22),_transparent_50%),radial-gradient(circle_at_bottom,_rgba(236,72,153,0.2),_transparent_55%),linear-gradient(120deg,_rgba(2,6,23,0.92),_rgba(2,6,23,0.85))]" />
@@ -21,9 +29,9 @@ export function ChatAppShell({ sidebar, topbar, children, insights, mobileSideba
 
       {mobileSidebar}
 
-      <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-6 px-3 pb-12 pt-6 sm:px-6 lg:px-8">
-        <div className="grid flex-1 gap-6 lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_320px]">
-          <aside className="hidden min-h-0 lg:flex">
+  <div className="relative z-10 mx-auto flex min-h-screen w-full max-w-[1400px] flex-col gap-6 px-3 pb-6 pt-6 sm:px-6 lg:px-8">
+        <div className={gridClass}>
+          <aside className="hidden min-h-0 lg:flex w-[260px] xl:w-[280px] flex-shrink-0">
             {sidebar}
           </aside>
           <section
@@ -39,7 +47,7 @@ export function ChatAppShell({ sidebar, topbar, children, insights, mobileSideba
               {children}
             </div>
           </section>
-          {insights && <aside className="hidden min-h-0 xl:flex">{insights}</aside>}
+          {insights && hasInsights ? <aside className="hidden min-h-0 xl:flex w-[320px] flex-shrink-0">{insights}</aside> : null}
         </div>
       </div>
     </div>

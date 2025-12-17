@@ -8,6 +8,7 @@ import { AIVisualization } from "@/components/ai-visualization"
 import { User, Volume2, VolumeX } from "lucide-react"
 import type { Mode, ModeDefinition, UIStyle } from "@/types/chat"
 import { Button } from "@/components/ui/button"
+import { MessageActions } from "@/components/chat/message-actions"
 
 type MessageContent = string | Array<{ type?: string; text?: string; value?: string } | string>
 
@@ -16,6 +17,7 @@ interface BaseMessage {
   role: string
   content: MessageContent
   createdAt?: string | number | Date
+  isFavorite?: boolean
 }
 
 interface ChatFeedProps {
@@ -31,6 +33,7 @@ interface ChatFeedProps {
   onQuickAction: (action: string) => void
   mode: Mode
   onImageRetry?: (messageId: string) => void
+  onFavoriteChange?: (messageId: string, isFavorite: boolean) => void
   // Speech props
   isSpeaking?: boolean
   currentSpeakingMessageId?: string | null
@@ -51,6 +54,7 @@ export function ChatFeed({
   onQuickAction,
   mode,
   onImageRetry,
+  onFavoriteChange,
   isSpeaking,
   currentSpeakingMessageId,
   onSpeakMessage,
@@ -67,16 +71,25 @@ export function ChatFeed({
   )
   const markdownStyle = isPixel ? { fontSize: "0.82rem", lineHeight: "1.55" } : undefined
 
-  // Flatten possible structured content from the API into plain text.
+  // Flatten possible structured content from the API into plain text or markdown
   const normalizeContent = (content: MessageContent): string => {
     if (typeof content === "string") return content
     if (Array.isArray(content)) {
       return content
         .map((part) => {
           if (typeof part === "string") return part
-          return part.text ?? part.value ?? ""
+          // Handle image parts - convert to markdown image syntax
+          if (part && typeof part === "object") {
+            const partObj = part as any
+            if (partObj.type === "image" && partObj.image) {
+              const imageUrl = typeof partObj.image === "string" ? partObj.image : partObj.image.url
+              return `![${partObj.alt || "Image"}](${imageUrl})`
+            }
+            return partObj.text ?? partObj.value ?? ""
+          }
+          return ""
         })
-        .join(" ")
+        .join("\n\n")
     }
     return ""
   }
@@ -273,6 +286,14 @@ export function ChatFeed({
                             <Volume2 className="h-3.5 w-3.5" />
                           )}
                         </Button>
+                      )}
+                      {!isUser && (
+                        <MessageActions
+                          messageId={message.id}
+                          content={normalizedContent}
+                          isFavorite={Boolean((message as any).isFavorite)}
+                          onFavoriteChange={(next) => onFavoriteChange?.(message.id, next)}
+                        />
                       )}
                     </div>
                   </div>

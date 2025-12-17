@@ -1,5 +1,7 @@
 import { Buffer } from "node:buffer"
 import { NextRequest, NextResponse } from "next/server"
+import { checkRateLimit, getRateLimitHeaders } from "@/lib/rate-limit"
+import { createServerSupabaseClient } from "@/lib/supabase/server"
 
 interface ImageGenerationSize {
   id: string
@@ -157,8 +159,8 @@ async function generateFreeAlternatives(
     try {
       console.log(`Trying ${service.name} with model: ${chosenModel}...`)
 
-  const requiresPost = "requiresPost" in service && Boolean(service.requiresPost)
-  if (service.isDirect && !requiresPost) {
+      const requiresPost = "requiresPost" in service && Boolean((service as any).requiresPost)
+      if (service.isDirect && !requiresPost) {
         const url = service.generateUrl()
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error("Request timeout")), 30_000),
@@ -195,6 +197,50 @@ async function generateFreeAlternatives(
 
         return {
           imageUrl: url,
+          credits: 0,
+          model: chosenModel,
+        }
+      }
+
+      // Some providers are "direct" but require POST to kick off generation.
+      // We still return a URL we can display if the API responds with one.
+      if (service.isDirect && requiresPost) {
+        const url = service.generateUrl()
+
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Request timeout")), 30_000),
+        )
+
+        const fetchPromise = fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            Accept: "application/json,*/*",
+          },
+          body: JSON.stringify({ prompt, width, height, model: chosenModel }),
+        })
+
+        const response = (await Promise.race([fetchPromise, timeoutPromise])) as Response
+
+        if (!response.ok) {
+          const text = await response.text().catch(() => "")
+          console.error(`${service.name} error: ${response.status} ${response.statusText} ${text}`)
+          continue
+        }
+
+        const data = (await response.json().catch(() => null)) as any
+        const imageUrl =
+          data?.imageUrl || data?.url || data?.data?.[0]?.url || data?.result?.url || data?.result
+
+        if (!imageUrl || typeof imageUrl !== "string") {
+          console.error(`${service.name} returned no usable image URL`)
+          continue
+        }
+
+        return {
+          imageUrl,
           credits: 0,
           model: chosenModel,
         }
@@ -252,22 +298,31 @@ async function generateFreeImage(
 
       if (service.isDirect) {
         const url = service.generateUrl()
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Request timeout")), 45_000),
-        )
+        const abortController = new AbortController()
+        const timeout = setTimeout(() => abortController.abort(), 20_000)
 
-        const fetchPromise = fetch(url, {
-          method: "GET",
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            Accept: "image/*,*/*",
-            Referer: "https://pollinations.ai/",
-            "Cache-Control": "no-cache",
-          },
-        })
-
-        const response = (await Promise.race([fetchPromise, timeoutPromise])) as Response
+        let response: Response
+        try {
+          response = await fetch(url, {
+            method: "GET",
+            signal: abortController.signal,
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              Accept: "image/*,*/*",
+              Referer: "https://pollinations.ai/",
+              "Cache-Control": "no-cache",
+            },
+          })
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "AbortError") {
+            console.warn(`${service.name} request timed out`)
+            continue
+          }
+          throw err
+        } finally {
+          clearTimeout(timeout)
+        }
 
         if (!response.ok) {
           console.error(`${service.name} error: ${response.status} ${response.statusText}`)
@@ -605,6 +660,33 @@ function generatePromptFromContent(
 
 export async function POST(req: NextRequest) {
   try {
+    // Check authentication and rate limiting
+    const supabase = await createServerSupabaseClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    // Get identifier for rate limiting (user ID or IP)
+    const identifier = user?.id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous"
+    const isAuthenticated = !!user
+
+    // Check rate limit
+    const rateLimitResult = await checkRateLimit(identifier, "image", isAuthenticated)
+    
+    if (!rateLimitResult.allowed) {
+      const headers = getRateLimitHeaders(
+        rateLimitResult.remaining,
+        rateLimitResult.resetAt,
+        rateLimitResult.limit
+      )
+      return NextResponse.json(
+        { 
+          error: "Rate limit exceeded. Please wait before generating more images.",
+          resetAt: rateLimitResult.resetAt.toISOString(),
+          isGuest: !isAuthenticated
+        },
+        { status: 429, headers }
+      )
+    }
+
     const {
       provider,
       prompt: customPrompt,

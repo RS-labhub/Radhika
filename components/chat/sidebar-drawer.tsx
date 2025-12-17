@@ -10,13 +10,14 @@ interface SidebarDrawerProps {
   onOpenChange: (open: boolean) => void
   children: ReactNode
   isPixel: boolean
+  side?: "left" | "right" | "top" | "bottom"
 }
 
-export function SidebarDrawer({ open, onOpenChange, children, isPixel }: SidebarDrawerProps) {
+export function SidebarDrawer({ open, onOpenChange, children, isPixel, side = "left" }: SidebarDrawerProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        side="left"
+        side={side}
         hideClose
         className={cn(
           "w-full max-w-none border-0 bg-white/95 p-0 backdrop-blur-xl dark:bg-slate-950/95 sm:w-[90vw] sm:max-w-sm",

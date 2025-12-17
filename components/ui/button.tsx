@@ -41,7 +41,9 @@ export interface ButtonProps
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, asChild = false, ...props }, ref) => {
-    const Comp = asChild ? Slot : 'button';
+    // Radix Slot's types can conflict with React/CSSProperties when multiple csstype versions exist.
+    // Casting here keeps runtime behavior identical while unblocking typechecking.
+    const Comp = (asChild ? Slot : 'button') as React.ElementType;
     return (
       <Comp
         className={cn(buttonVariants({ variant, size, className }))}
