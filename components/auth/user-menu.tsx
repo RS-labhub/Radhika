@@ -39,6 +39,15 @@ export function UserMenu({ isPixel = false, accentRingClass }: UserMenuProps) {
 
   const handleSignOut = async () => {
     await signOut()
+    // Notify other parts of the app (notably the chat page) that the user has signed out
+    try {
+      if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+        window.dispatchEvent(new CustomEvent("radhika:signOut"))
+      }
+    } catch (e) {
+      // non-fatal
+    }
+
     router.push("/")
   }
 

@@ -19,6 +19,9 @@ import {
   Clock
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
+import type { Components } from "react-markdown"
 import { chatService } from "@/lib/supabase/chat-service"
 import { toast } from "sonner"
 
@@ -121,6 +124,31 @@ export default function FavoritesPage() {
     })
   }
 
+  // Normalize/prepare content for markdown rendering. Kept simple here because
+  // favorites currently store plain markdown/text. This mirrors the logic in
+  // `components/chat/chat-feed.tsx` so images (including generated images)
+  // render correctly.
+  const normalizeContent = (content: any): string => {
+    if (typeof content === "string") return content
+    if (Array.isArray(content)) {
+      return content
+        .map((part) => {
+          if (typeof part === "string") return part
+          if (part && typeof part === "object") {
+            const partObj: any = part
+            if (partObj.type === "image" && partObj.image) {
+              const imageUrl = typeof partObj.image === "string" ? partObj.image : partObj.image.url
+              return `![${partObj.alt || "Image"}](${imageUrl})`
+            }
+            return partObj.text ?? partObj.value ?? ""
+          }
+          return ""
+        })
+        .join("\n\n")
+    }
+    return ""
+  }
+
   if (authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
@@ -199,11 +227,50 @@ export default function FavoritesPage() {
                         </span>
                       </div>
 
-                      {/* Content */}
-                      <div className="prose prose-sm dark:prose-invert max-w-none">
-                        <p className="whitespace-pre-wrap text-slate-700 dark:text-slate-300">
-                          {favorite.chat_messages.content}
-                        </p>
+                      {/* Content (render markdown so images show correctly) */}
+                      <div className="prose prose-sm max-w-none break-words dark:prose-invert [&_*]:break-words [&_pre]:whitespace-pre-wrap [&_code]:break-words">
+                        {
+                          (() => {
+                            const normalizedContent = normalizeContent(favorite.chat_messages.content)
+
+                            return (
+                              <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                  // Use the same generated-image rendering logic as chat-feed
+                                  img: ({ src, alt }) => {
+                                    const isGeneratedImage = alt?.includes("Generated image") || normalizedContent.includes("**Prompt:**")
+
+                                    if (isGeneratedImage) {
+                                      const GeneratedImage = require("@/components/chat/generated-image").GeneratedImage
+                                      return (
+                                        <GeneratedImage
+                                          src={src || ""}
+                                          alt={alt || ""}
+                                          isPixel={false}
+                                        />
+                                      )
+                                    }
+
+                                    return (
+                                      <img
+                                        src={src}
+                                        alt={alt}
+                                        className={cn(
+                                          "w-full h-auto my-3",
+                                          "rounded-2xl border border-white/40 dark:border-white/10"
+                                        )}
+                                        loading="lazy"
+                                      />
+                                    )
+                                  },
+                                }}
+                              >
+                                {normalizedContent}
+                              </ReactMarkdown>
+                            )
+                          })()
+                        }
                       </div>
                     </div>
 

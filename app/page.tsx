@@ -33,6 +33,7 @@ import { GeneratedImage } from "@/components/chat/generated-image"
 import { useSpeech } from "@/hooks/use-speech"
 import { UserMenu } from "@/components/auth/user-menu"
 import { useFeatureAccess } from "@/hooks/use-feature-access"
+import { useAuth } from "@/contexts/auth-context"
 import { useTheme } from "next-themes"
 import { chatService } from "@/lib/supabase/chat-service"
 
@@ -342,6 +343,7 @@ export default function FuturisticRadhika() {
   }, [modelPreferences])
 
   const { isAuthenticated, canUseMode, canUsePersonalization } = useFeatureAccess()
+  const { user } = useAuth()
   // Default: insights panel expanded
   const [isInsightsCollapsed, setIsInsightsCollapsed] = useState(false)
 
@@ -639,6 +641,14 @@ export default function FuturisticRadhika() {
         const newChat = await createNewChat()
         if (newChat) {
           console.log("✅ New chat created:", newChat.id)
+          // Mark this chat as "loaded" so the persisted loader won't immediately
+          // replace local optimistic UI while we still need to add the first message.
+          try {
+            hasLoadedRef.current = newChat.id
+            persistedMessageIdsRef.current = new Set()
+          } catch (e) {
+            // ignore
+          }
           // Small delay to ensure state updates
           await new Promise(resolve => setTimeout(resolve, 100))
         }
@@ -704,10 +714,32 @@ export default function FuturisticRadhika() {
             persistedMessageIdsRef.current.add(msg.id)
           }
         }
-        setMessages(formattedMessages)
-        messagesByModeRef.current[mode] = formattedMessages
+        // Merge persisted messages with any existing local messages to avoid
+        // clobbering optimistic UI entries (e.g., the first user message).
+        const localMessages = messagesByModeRef.current[mode] ?? messages ?? []
+
+        // Build map of messages from persisted list (DB-first), then overlay local messages
+        const map = new Map<string, any>()
+        for (const m of formattedMessages) {
+          if (m?.id) map.set(m.id, m)
+        }
+        for (const lm of localMessages) {
+          if (lm?.id) {
+            // Prefer local message content (optimistic) over DB when IDs collide
+            map.set(lm.id, { ...map.get(lm.id), ...lm })
+          }
+        }
+
+        const merged = Array.from(map.values()).sort((a: any, b: any) => {
+          const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0
+          const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0
+          return ta - tb
+        })
+
+        setMessages(merged)
+        messagesByModeRef.current[mode] = merged
         hasLoadedRef.current = currentChat.id
-        previousMessagesLengthRef.current = formattedMessages.length
+        previousMessagesLengthRef.current = merged.length
         isRestoringRef.current = false
       } catch (err) {
         console.error("Failed to load persisted messages:", err)
@@ -1003,6 +1035,35 @@ export default function FuturisticRadhika() {
     stopSpeaking()
   }, [setMessages, clearSpeechError, stopSpeaking])
 
+  // Clear chat UI when user signs out elsewhere in the app
+  useEffect(() => {
+    const handler = () => {
+      try {
+        // Clear UI messages and any current chat attachment
+        clearChat()
+        if (typeof clearCurrentChat === "function") {
+          clearCurrentChat()
+        }
+        // Reset persistence/load tracking
+        hasLoadedRef.current = null
+        previousMessagesLengthRef.current = 0
+        persistedMessageIdsRef.current = new Set()
+      } catch (err) {
+        console.error("Failed to clear chat on sign out:", err)
+      }
+    }
+
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("radhika:signOut", handler)
+    }
+
+    return () => {
+      if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+        window.removeEventListener("radhika:signOut", handler)
+      }
+    }
+  }, [clearChat, clearCurrentChat])
+
   // Refresh the list of all chats
   const refreshChats = useCallback(async () => {
     if (!persistenceEnabled || !getAllChats) return
@@ -1046,12 +1107,38 @@ export default function FuturisticRadhika() {
 
     console.log("🔄 Auto-creating chat session after first message...")
     isCreatingChatRef.current = true
+
+    // Capture any local messages present so we can persist them after the chat is created.
+    const pendingMessages = messagesByModeRef.current[currentModeRef.current] ?? messages.slice()
+
     ;(async () => {
       try {
         const newChat = await createNewChat()
         if (newChat) {
+          // Mark as loaded to prevent immediate reload from clearing local messages
           hasLoadedRef.current = newChat.id
           persistedMessageIdsRef.current = new Set()
+
+          try {
+            for (const msg of pendingMessages) {
+              if (!msg || !msg.id) continue
+              if (persistedMessageIdsRef.current.has(msg.id)) continue
+              if (msg.role !== "user") continue
+
+              const normalized = normalizeContentForStorage(msg.content)
+              if (!normalized || !normalized.trim()) continue
+
+              try {
+                await chatService.addMessage(newChat.id, msg.role, normalized, msg.metadata, msg.id)
+                persistedMessageIdsRef.current.add(msg.id)
+              } catch (err) {
+                console.error("Failed to persist pending message during auto-create:", err)
+              }
+            }
+          } catch (err) {
+            console.error("Error while persisting pending messages after auto-create:", err)
+          }
+
           console.log("✅ Auto-created chat session:", newChat.id)
           await refreshChats()
         }
@@ -1274,6 +1361,16 @@ export default function FuturisticRadhika() {
       }
 
       setProvider(nextProvider)
+      // Persist selected provider for authenticated users so it's remembered across refreshes
+      try {
+        if (isAuthenticated && user && typeof window !== "undefined") {
+          const key = `radhika-selected-provider:${user.id}`
+          localStorage.setItem(key, nextProvider)
+        }
+      } catch (err) {
+        // Non-fatal - ignore storage errors
+        console.error("Failed to persist selected provider:", err)
+      }
       // Reset to provider default model unless a custom is already set for that provider
       setModelPreferences((prev) => ({
         ...prev,
@@ -1284,6 +1381,22 @@ export default function FuturisticRadhika() {
     },
     [apiKeys, clearSpeechError],
   )
+
+  // Load persisted provider preference for authenticated users (per-user key)
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!isAuthenticated || !user) return
+
+    try {
+      const key = `radhika-selected-provider:${user.id}`
+      const saved = localStorage.getItem(key)
+      if (saved && Object.prototype.hasOwnProperty.call(PROVIDERS, saved)) {
+        setProvider(saved as Provider)
+      }
+    } catch (err) {
+      console.error("Failed to load persisted provider preference:", err)
+    }
+  }, [isAuthenticated, user])
 
   const handleSaveApiKey = useCallback(() => {
     if (!tempApiKey.trim()) {

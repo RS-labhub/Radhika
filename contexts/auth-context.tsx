@@ -255,15 +255,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             role: profile?.role || "authenticated",
           })
         } else if (event === "SIGNED_OUT") {
-          setState({
-            user: null,
-            session: null,
-            profile: null,
-            settings: null,
-            isLoading: false,
-            isAuthenticated: false,
-            role: "guest",
-          })
+            setState({
+              user: null,
+              session: null,
+              profile: null,
+              settings: null,
+              isLoading: false,
+              isAuthenticated: false,
+              role: "guest",
+            })
+            try {
+              if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+                window.dispatchEvent(new CustomEvent("radhika:signOut"))
+              }
+            } catch (e) {
+              // ignore
+            }
         } else if (event === "TOKEN_REFRESHED" && session) {
           setState(prev => ({ ...prev, session }))
         }

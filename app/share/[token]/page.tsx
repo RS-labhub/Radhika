@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
-import { Loader2, MessageCircle, User } from "lucide-react"
+import { Loader2, MessageCircle, User, Sun, Moon, Copy, Download } from "lucide-react"
 import { chatService } from "@/lib/supabase/chat-service"
 import type { Chat, ChatMessage } from "@/types/chat"
 import ReactMarkdown from "react-markdown"
@@ -17,8 +17,30 @@ export default function SharedChatPage() {
   const [messages, setMessages] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [copiedMap, setCopiedMap] = useState<Record<string, "copied" | "url" | "failed" | undefined>>({})
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    try {
+      const stored = typeof window !== "undefined" ? localStorage.getItem("radhika-theme") : null
+      if (stored === "dark") return "dark"
+      if (stored === "light") return "light"
+      if (typeof window !== "undefined" && document.documentElement.classList.contains("dark")) return "dark"
+    } catch (e) {}
+    return "light"
+  })
 
   useEffect(() => {
+    // Initialize theme from localStorage or html class
+    try {
+      const stored = localStorage.getItem("radhika-theme")
+      if (stored === "dark" || (!stored && document.documentElement.classList.contains("dark"))) {
+        setTheme("dark")
+        document.documentElement.classList.add("dark")
+      } else {
+        setTheme("light")
+        document.documentElement.classList.remove("dark")
+      }
+    } catch (e) {}
+
     async function loadSharedChat() {
       if (!token) return
 
@@ -56,6 +78,96 @@ export default function SharedChatPage() {
 
     loadSharedChat()
   }, [token])
+
+  function setCopied(key: string, status: "copied" | "url" | "failed" = "copied") {
+    setCopiedMap((s) => ({ ...s, [key]: status }))
+    setTimeout(() => setCopiedMap((s) => ({ ...s, [key]: undefined })), 1500)
+  }
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch (e) {
+      console.error("copy failed", e)
+      return false
+    }
+  }
+
+  async function copyImageToClipboard(src: string): Promise<"blob" | "url" | false> {
+    try {
+      if (!(navigator as any).clipboard) {
+        // Clipboard API not available, copy URL
+        try {
+          await navigator.clipboard.writeText(src)
+          return "url"
+        } catch (e) {
+          console.error("clipboard not available and writing url failed", e)
+          return false
+        }
+      }
+
+      if ((window as any).ClipboardItem) {
+        try {
+          const res = await fetch(src, { mode: "cors" })
+          if (!res.ok) throw new Error(`fetch failed: ${res.status}`)
+          const blob = await res.blob()
+          const item = new (window as any).ClipboardItem({ [blob.type]: blob })
+          await (navigator as any).clipboard.write([item])
+          return "blob"
+        } catch (err) {
+          // Could fail due to CORS or platform restrictions. Fall back to copying URL.
+          console.info("clipboard image write failed, falling back to URL", err)
+          try {
+            await navigator.clipboard.writeText(src)
+            return "url"
+          } catch (e2) {
+            console.error("fallback copy url failed", e2)
+            return false
+          }
+        }
+      }
+
+      // No ClipboardItem support, copy URL
+      try {
+        await navigator.clipboard.writeText(src)
+        return "url"
+      } catch (e) {
+        console.error("copy image url failed", e)
+        return false
+      }
+    } catch (e) {
+      console.error("copy image failed", e)
+      return false
+    }
+  }
+
+  async function downloadImage(src: string, filename = "image") {
+    try {
+      const res = await fetch(src)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error("download failed", e)
+    }
+  }
+
+  function toggleTheme() {
+    const next = theme === "dark" ? "light" : "dark"
+    setTheme(next)
+    try {
+      localStorage.setItem("radhika-theme", next)
+    } catch (e) {}
+    if (next === "dark") document.documentElement.classList.add("dark")
+    else document.documentElement.classList.remove("dark")
+  }
 
   if (loading) {
     return (
@@ -108,12 +220,27 @@ export default function SharedChatPage() {
               </p>
             </div>
           </div>
-          <a
-            href="/"
-            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-          >
-            Try Radhika
-          </a>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              aria-label="Toggle theme"
+              className="group inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
+              {theme === "dark" ? (
+                <Sun className="h-4 w-4" />
+              ) : (
+                <Moon className="h-4 w-4" />
+              )}
+            </button>
+
+            <a
+              href="/"
+              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
+              Try Radhika
+            </a>
+          </div>
         </div>
       </header>
 
@@ -162,6 +289,62 @@ export default function SharedChatPage() {
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
                           components={{
+                            // Handle paragraphs that contain only an image: render a block wrapper with overlays
+                            p: ({ node, children }: any) => {
+                              try {
+                                const onlyChild = node?.children && node.children.length === 1 && node.children[0]
+                                if (onlyChild && onlyChild.type === 'element' && onlyChild.tagName === 'img') {
+                                  const props = onlyChild.properties || {}
+                                  const src = props.src
+                                  const alt = props.alt || props.title || ''
+                                  const key = `${message.id}-${src}`
+                                  return (
+                                    <div className="relative my-3">
+                                      <img
+                                        src={src}
+                                        alt={alt}
+                                        className="h-auto w-full rounded-2xl border border-white/40 dark:border-white/10"
+                                        loading="lazy"
+                                      />
+                                      <div className="absolute right-2 top-2 flex gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            const res = await copyImageToClipboard(src || "")
+                                            if (res === "blob") setCopied(key, "copied")
+                                            else if (res === "url") setCopied(key, "url")
+                                            else setCopied(key, "failed")
+                                          }}
+                                          title="Copy image"
+                                          className="inline-flex items-center gap-2 rounded-md bg-white/90 px-2 py-1 text-xs font-medium text-slate-700 shadow-sm backdrop-blur-sm dark:bg-slate-800/80 dark:text-slate-200"
+                                        >
+                                          {copiedMap[key] === "copied" ? (
+                                            <span className="text-xs">Copied</span>
+                                          ) : copiedMap[key] === "url" ? (
+                                            <span className="text-xs">Copied URL</span>
+                                          ) : copiedMap[key] === "failed" ? (
+                                            <span className="text-xs">Fail</span>
+                                          ) : (
+                                            <Copy className="h-4 w-4" />
+                                          )}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => downloadImage(src || "image")}
+                                          title="Download image"
+                                          className="inline-flex items-center gap-2 rounded-md bg-white/90 px-2 py-1 text-xs font-medium text-slate-700 shadow-sm backdrop-blur-sm dark:bg-slate-800/80 dark:text-slate-200"
+                                        >
+                                          <Download className="h-4 w-4" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )
+                                }
+                              } catch (e) {
+                                // fallback to default paragraph
+                              }
+                              return <p>{children}</p>
+                            },
                             img: ({ src, alt }) => (
                               <img
                                 src={src}
@@ -170,18 +353,36 @@ export default function SharedChatPage() {
                                 loading="lazy"
                               />
                             ),
-                            pre: ({ children }) => (
-                              <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-slate-900 p-4 text-sm dark:bg-slate-950 sm:whitespace-pre">
-                                {children}
-                              </pre>
-                            ),
+                            pre: ({ children }) => {
+                              const codeEl = Array.isArray(children) ? children[0] as any : (children as any)
+                              const codeText = codeEl?.props?.children ?? String(codeEl)
+                              const key = `${message.id}-${String(codeText).slice(0,40)}-${String(codeText).length}`
+                              return (
+                                <div className="relative">
+                                  <pre className="max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-slate-100 p-4 text-sm text-slate-900 dark:bg-slate-950 dark:text-slate-100 sm:whitespace-pre">
+                                    {children}
+                                  </pre>
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      await copyText(String(codeText))
+                                      setCopied(key)
+                                    }}
+                                    title="Copy code"
+                                    className="absolute right-2 top-2 inline-flex items-center gap-2 rounded-md bg-white/90 px-2 py-1 text-xs font-medium text-slate-700 shadow-sm backdrop-blur-sm dark:bg-slate-800/80 dark:text-slate-200"
+                                  >
+                                    {copiedMap[key] ? <span className="text-xs">Copied</span> : <Copy className="h-4 w-4" />}
+                                  </button>
+                                </div>
+                              )
+                            },
                             code: ({ inline, children, ...props }: any) => (
                               inline ? (
-                                <code className="break-words rounded bg-slate-100 px-1 py-0.5 text-xs dark:bg-slate-800" {...props}>
+                                <code className="break-words rounded bg-slate-100 px-1 py-0.5 text-xs text-slate-900 dark:bg-slate-800 dark:text-slate-100" {...props}>
                                   {children}
                                 </code>
                               ) : (
-                                <code className="break-words text-xs" {...props}>
+                                <code className="break-words text-xs text-slate-900 dark:text-slate-100" {...props}>
                                   {children}
                                 </code>
                               )

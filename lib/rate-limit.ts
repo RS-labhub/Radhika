@@ -13,7 +13,7 @@ const GUEST_RATE_LIMITS: Record<string, RateLimitConfig> = {
 }
 
 const AUTH_RATE_LIMITS: Record<string, RateLimitConfig> = {
-  chat: { maxRequests: 100, windowMs: 60 * 60 * 1000 }, // 100 per hour
+  chat: { maxRequests: 150, windowMs: 60 * 60 * 1000 }, // 150 per hour
   image: { maxRequests: 50, windowMs: 60 * 60 * 1000 }, // 50 per hour
   speech: { maxRequests: 100, windowMs: 60 * 60 * 1000 }, // 100 per hour
   default: { maxRequests: 200, windowMs: 60 * 60 * 1000 }, // 200 per hour

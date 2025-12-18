@@ -1,6 +1,6 @@
 import { checkRateLimit, getRateLimitHeaders } from "@/lib/rate-limit"
 import { createServerSupabaseClient } from "@/lib/supabase/server"
-import { SYSTEM_PROMPTS } from "@/lib/chat/system-prompts"
+import { SYSTEM_PROMPTS, CORE_SYSTEM_PROMPT } from "@/lib/chat/system-prompts"
 import { createPersonalizedPrompt, type UserGender, type UserAge } from "@/lib/chat/personalization"
 import { handleGeminiRequest } from "./providers/gemini"
 import { handleOpenAIRequest } from "./providers/openai"
@@ -21,6 +21,24 @@ export async function POST(req: Request) {
     // Get identifier for rate limiting (user ID or IP)
     const identifier = user?.id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous"
     const isAuthenticated = !!user
+
+    // Check whether this user is the reserved creator (server-side)
+    let isCreator = false
+    if (user?.id) {
+      try {
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('is_creator')
+          .eq('id', user.id)
+          .single()
+
+        if (!profileError && profile) {
+          isCreator = (profile as any).is_creator === true
+        }
+      } catch (e) {
+        console.error('Failed to read profile.is_creator', e)
+      }
+    }
 
     // Check rate limit
     const rateLimitResult = await checkRateLimit(identifier, "chat", isAuthenticated)
@@ -133,22 +151,29 @@ export async function POST(req: Request) {
     const finalAge = (dbAge || userAge) as UserAge
     const finalTone = dbTone || conversationTone
 
-    // Get base prompt and personalize it
-    const basePrompt = SYSTEM_PROMPTS[mode as keyof typeof SYSTEM_PROMPTS] || SYSTEM_PROMPTS.general
-    const recentUserMessages = (messages || [])
-      .filter((m: any) => m?.role === "user" && typeof m?.content === "string")
-      .slice(-6)
-      .map((m: any) => String(m.content))
+    // Get system prompt
+    // If the user is the reserved creator, DO NOT apply user personalization
+    // — use a strict creator system prompt so the assistant follows the creator rules exactly.
+    let systemPrompt: string
+    if (isCreator) {
+      systemPrompt = `${CORE_SYSTEM_PROMPT}\n\n=== CREATOR MODE ===\nThis user is the reserved creator. When speaking to them, follow the creator-only rules verbatim and do NOT apply age/gender personalization or casual slang overrides. IMPORTANT: If asked who made you or who your creator is while speaking to this user, reply : \"it's you\" (do not print Rohan's portfolio links or other creator credits in this case). Include the usual short cinematic mini-story only when asked about the origin in other contexts — for the reserved creator, the brief reply above is mandatory.`
+    } else {
+      const basePrompt = SYSTEM_PROMPTS[mode as keyof typeof SYSTEM_PROMPTS] || SYSTEM_PROMPTS.general
+      const recentUserMessages = (messages || [])
+        .filter((m: any) => m?.role === "user" && typeof m?.content === "string")
+        .slice(-6)
+        .map((m: any) => String(m.content))
 
-    const systemPrompt = createPersonalizedPrompt(
-      basePrompt,
-      finalGender,
-      finalAge,
-      finalTone,
-      userName,
-      petName,
-      recentUserMessages
-    )
+      systemPrompt = createPersonalizedPrompt(
+        basePrompt,
+        finalGender,
+        finalAge,
+        finalTone,
+        userName,
+        petName,
+        recentUserMessages
+      )
+    }
     
     console.log("User personalization:", { 
       userName, 

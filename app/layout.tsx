@@ -54,7 +54,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${sans.variable} ${display.variable} ${pixel.variable} font-sans antialiased`}>
+      <body suppressHydrationWarning className={`${sans.variable} ${display.variable} ${pixel.variable} font-sans antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <AuthProvider>
             {children}
