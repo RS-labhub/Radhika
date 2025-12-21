@@ -27,6 +27,7 @@ import { ActivityMatrix } from "@/components/activity-matrix"
 import { Button } from "@/components/ui/button"
 import { ApiKeyDialog } from "@/components/dialog/api-key-dialog"
 import { ImageSettingsDialog } from "@/components/dialog/image-settings-dialog"
+import { ExportDialog } from "@/components/chat/export-dialog"
 import { CodeBlock } from "@/components/chat/code-block"
 import { useChatPersistence } from "@/hooks/use-chat-persistence"
 import { GeneratedImage } from "@/components/chat/generated-image"
@@ -288,6 +289,7 @@ export default function FuturisticRadhika() {
 
   const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false)
   const [isImageSettingsDialogOpen, setIsImageSettingsDialogOpen] = useState(false)
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false)
   const [imageSettings, setImageSettings] = useState<ImageSettings>(() => createDefaultImageSettings())
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
   const isGeneratingImageRef = useRef(false)
@@ -2332,6 +2334,7 @@ export default function FuturisticRadhika() {
               setError(null)
               clearSpeechError()
             }}
+            onExportChat={() => setIsExportDialogOpen(true)}
             userMenu={<UserMenu />}
             heatmapAvailable={isAuthenticated}
             currentProfileId={currentProfileId}
@@ -2445,6 +2448,21 @@ export default function FuturisticRadhika() {
           isLoading={isLoadingAllChats}
         />
       </SidebarDrawer>
+
+      <ExportDialog
+        open={isExportDialogOpen}
+        onOpenChange={setIsExportDialogOpen}
+        messages={messages.map((msg: any) => ({
+          id: msg.id || `${Date.now()}-${Math.random()}`,
+          chat_id: currentChat?.id || "",
+          role: msg.role,
+          content: msg.content,
+          metadata: null,
+          created_at: msg.createdAt || new Date().toISOString(),
+          is_favorite: false,
+        }))}
+        chatTitle={`${currentMode.label} Chat`}
+      />
 
       <Analytics />
       <SpeedInsights />

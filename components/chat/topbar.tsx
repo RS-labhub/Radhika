@@ -20,6 +20,7 @@ import {
   Activity,
   Volume2,
   VolumeX,
+  Download,
 } from "lucide-react"
 import { ProfileSelector } from "./profile-selector"
 
@@ -45,6 +46,7 @@ interface ChatTopbarProps {
   userMenu?: React.ReactNode
   currentProfileId?: string | null
   onProfileSelect?: (profileId: string | null) => void
+  onExportChat?: () => void
 }
 
 export function ChatTopbar({
@@ -68,6 +70,7 @@ export function ChatTopbar({
   showVoiceToggle = false,
   currentProfileId,
   onProfileSelect,
+  onExportChat,
 }: ChatTopbarProps) {
   const isPixel = uiStyle === "pixel"
   const CurrentModeIcon = modeMeta.icon
@@ -230,6 +233,19 @@ export function ChatTopbar({
           >
             {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
+          {onExportChat && messageCount > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onExportChat}
+              className={cn(controlButton)}
+              aria-label="Export chat"
+              title="Export chat to PDF"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+          )}
           {!isAuthenticated && (
             <Button
               type="button"
