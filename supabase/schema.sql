@@ -137,9 +137,14 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id ON public.chat_messages(cha
 CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON public.favorites(user_id);
 CREATE INDEX IF NOT EXISTS idx_rate_limits_identifier ON public.rate_limits(identifier);
 
--- ============================================
--- ROW LEVEL SECURITY (RLS) POLICIES
--- ============================================
+-- Optimized composite indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_chats_user_active_last_message ON public.chats(user_id, last_message_at DESC)
+  WHERE is_archived = false AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_chats_user_mode_profile_active_last_message ON public.chats(user_id, mode, profile_id, last_message_at DESC)
+  WHERE is_archived = false AND deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_chat_id_created_at ON public.chat_messages(chat_id, created_at DESC);
 
 -- ============================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
