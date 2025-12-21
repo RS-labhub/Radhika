@@ -199,62 +199,10 @@ type ApiKeyMap = {
 }
 
 type ProviderModelMap = Record<Provider, string>
-type DraftMessage = {
-  id: string
-  role: "user" | "assistant" | "system"
-  content: string
-  metadata?: Record<string, any>
-  createdAt?: string
-}
-type ChatDraft = {
-  mode: Mode
-  profileId?: string | null
-  messages: DraftMessage[]
-  updatedAt: string
-}
 
 const IMAGE_SETTINGS_STORAGE_KEY = "radhika-image-settings"
 const LEGACY_IMAGE_PROVIDER_KEYS_STORAGE_KEY = "radhika-image-provider-keys"
 const PERSONALIZATION_STORAGE_KEY = "radhika-personalization"
-const CHAT_DRAFT_STORAGE_PREFIX = "radhika-chat-draft-v1"
-const DRAFT_SAVE_DEBOUNCE_MS = 800
-
-const getDraftKey = (draftMode: Mode, draftProfileId: string | null) =>
-  `${CHAT_DRAFT_STORAGE_PREFIX}:${draftMode}:${draftProfileId ?? "default"}`
-
-const readDraft = (draftMode: Mode, draftProfileId: string | null): ChatDraft | null => {
-  if (typeof window === "undefined") return null
-  try {
-    const raw = localStorage.getItem(getDraftKey(draftMode, draftProfileId))
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as ChatDraft
-    if (!parsed?.messages?.length) return null
-    return parsed
-  } catch {
-    return null
-  }
-}
-
-const writeDraft = (draft: ChatDraft) => {
-  if (typeof window === "undefined") return
-  try {
-    localStorage.setItem(
-      getDraftKey(draft.mode, draft.profileId ?? null),
-      JSON.stringify(draft)
-    )
-  } catch {
-    // Ignore storage failures (quota, privacy mode).
-  }
-}
-
-const clearDraft = (draftMode: Mode, draftProfileId: string | null) => {
-  if (typeof window === "undefined") return
-  try {
-    localStorage.removeItem(getDraftKey(draftMode, draftProfileId))
-  } catch {
-    // ignore
-  }
-}
 
 const createDefaultImageSettings = (providerId: ImageProviderId = DEFAULT_IMAGE_PROVIDER): ImageSettings => {
   const providerMeta = IMAGE_PROVIDERS[providerId]
@@ -434,10 +382,6 @@ export default function FuturisticRadhika() {
   currentModeRef.current = mode
   const persistedMessageIdsRef = useRef<Set<string>>(new Set())
   const isCreatingChatRef = useRef(false)
-  const autoCreateRequestedRef = useRef(false)
-  const autoCreateMessageCountRef = useRef(0)
-  const restoredDraftRef = useRef<Record<string, boolean>>({})
-  const draftRestoredForSessionRef = useRef(false)
   const currentChatRef = useRef(currentChat)
   const persistenceEnabledRef = useRef(persistenceEnabled)
   
@@ -494,7 +438,6 @@ export default function FuturisticRadhika() {
             const partObj = part as any
             if (partObj.type === "image" && partObj.image) {
               const imageUrl = typeof partObj.image === "string" ? partObj.image : partObj.image.url
-              // Include metadata in markdown comment for restoration
               return `![${partObj.alt || "Image"}](${imageUrl})`
             }
             // Handle text content
@@ -503,7 +446,6 @@ export default function FuturisticRadhika() {
           }
           return ""
         })
-        .filter(Boolean) // Remove empty strings
         .join("\n\n")
     }
     if (content && typeof content === "object") {
@@ -518,21 +460,19 @@ export default function FuturisticRadhika() {
   }, [])
 
   const chatConfig = useMemo(
-    () => {
-      console.log("🔧 Creating chatConfig with currentChat:", currentChat?.id)
-      return {
-        api: "/api/chat",
-        body: {
-          mode,
-          provider,
-          model: resolveModel(provider),
-          userGender: userPersonalization.gender,
-          userAge: userPersonalization.age,
-          conversationTone: mode === "bff" ? undefined : userPersonalization.tone,
-          ...(currentApiKey ? { apiKey: currentApiKey } : {}),
-        },
+    () => ({
+      api: "/api/chat",
+      body: {
+        mode,
+        provider,
+        model: resolveModel(provider),
+        userGender: userPersonalization.gender,
+        userAge: userPersonalization.age,
+        conversationTone: mode === "bff" ? undefined : userPersonalization.tone,
+        ...(currentApiKey ? { apiKey: currentApiKey } : {}),
+      },
       onError: (incomingError: Error) => {
-        console.error("❌ Chat error details:", incomingError)
+        console.error("Chat error details:", incomingError)
         const message = incomingError.message || "Failed to send message. Please try again."
         setError(
           message.includes("API") || message.includes("key")
@@ -540,14 +480,9 @@ export default function FuturisticRadhika() {
             : message,
         )
       },
-      onResponse: (response: Response) => {
-        console.log("📥 Chat response received:", response.status, response.statusText)
-      },
       onFinish: async (message: any) => {
         console.log("=== onFinish called ===")
-        console.log("Message ID:", message?.id)
-        console.log("Message role:", message?.role)
-        console.log("Message content length:", message?.content?.length)
+        console.log("Message:", JSON.stringify(message, null, 2))
         console.log("Current chat:", currentChat?.id)
         console.log("Persistence enabled:", persistenceEnabled)
         
@@ -595,11 +530,7 @@ export default function FuturisticRadhika() {
                 message.id
               )
               persistedMessageIdsRef.current.add(message.id)
-              if (savedMessage) {
-                console.log("✅ Successfully persisted assistant message:", savedMessage)
-              } else {
-                console.warn("Assistant message queued for retry.")
-              }
+              console.log("✅ Successfully persisted assistant message:", savedMessage)
             } catch (err) {
               console.error("❌ Failed to persist assistant message:", err)
               console.error("Error details:", JSON.stringify(err, null, 2))
@@ -623,17 +554,12 @@ export default function FuturisticRadhika() {
         }
         
         if (voiceEnabledRef.current && message?.content) {
-          try {
-            speakMessage(message.content, undefined, mode)
-          } catch (voiceErr) {
-            console.error("Voice error in onFinish:", voiceErr)
-          }
+          speakMessage(message.content, undefined, mode)
         }
         
-        console.log("=== onFinish completed successfully ===\n")
+        console.log("=== onFinish completed ===\n")
       },
-    }
-    },
+    }),
     [mode, provider, currentApiKey, speakMessage, userPersonalization, resolveModel, persistenceEnabled, currentChat, normalizeContentForStorage, createNewChat],
   )
 
@@ -707,18 +633,39 @@ export default function FuturisticRadhika() {
       return
     }
     
-    if (persistenceEnabled && !currentChat && typeof createNewChat === "function" && !isCreatingChatRef.current) {
-      autoCreateRequestedRef.current = true
-      autoCreateMessageCountRef.current = messages.length
+    // Ensure we have a chat session before submitting
+    if (persistenceEnabled && !currentChat && createNewChat && !isCreatingChatRef.current) {
+      console.log("📝 Creating new chat session before message submission...")
+      isCreatingChatRef.current = true
+      try {
+        const newChat = await createNewChat()
+        if (newChat) {
+          console.log("✅ New chat created:", newChat.id)
+          // Mark this chat as "loaded" so the persisted loader won't immediately
+          // replace local optimistic UI while we still need to add the first message.
+          try {
+            hasLoadedRef.current = newChat.id
+            persistedMessageIdsRef.current = new Set()
+          } catch (e) {
+            // ignore
+          }
+          // Small delay to ensure state updates
+          await new Promise(resolve => setTimeout(resolve, 100))
+        }
+      } catch (err) {
+        console.error("❌ Failed to create chat session:", err)
+      } finally {
+        isCreatingChatRef.current = false
+      }
     }
-
+    
     // Always use our composer handler (it routes to either image generation or chat)
     if (handleComposerSubmitRef.current) {
       await handleComposerSubmitRef.current(e)
     } else {
       console.warn("handleComposerSubmit not ready yet")
     }
-  }, [persistenceEnabled, currentChat, createNewChat, messages.length])
+  }, [persistenceEnabled, currentChat, createNewChat])
 
   const stopStreaming = useCallback(() => {
     if (!isChatLoadingRef.current) return
@@ -742,75 +689,6 @@ export default function FuturisticRadhika() {
     messagesByModeRef.current[currentModeRef.current] = [...messages]
   }, [messages])
 
-  useEffect(() => {
-    if (!persistenceEnabled || currentChat || messages.length > 0) return
-    if (typeof window === "undefined") return
-
-    const key = getDraftKey(mode, currentProfileId)
-    if (restoredDraftRef.current[key]) return
-
-    const draft = readDraft(mode, currentProfileId)
-    if (!draft?.messages?.length) return
-
-    const restored = draft.messages.map((msg) => ({
-      id: msg.id,
-      role: msg.role,
-      content: msg.content,
-      createdAt: msg.createdAt ? new Date(msg.createdAt) : undefined,
-      metadata: msg.metadata,
-    }))
-
-    setMessages(restored)
-    messagesByModeRef.current[mode] = restored
-    autoCreateRequestedRef.current = true
-    autoCreateMessageCountRef.current = 0
-    draftRestoredForSessionRef.current = true
-    restoredDraftRef.current[key] = true
-  }, [persistenceEnabled, currentChat, messages.length, mode, currentProfileId, setMessages])
-
-  useEffect(() => {
-    if (!persistenceEnabled || currentChat || messages.length === 0) return
-    if (typeof window === "undefined") return
-
-    const timeoutId = setTimeout(() => {
-      const draftMessages: DraftMessage[] = []
-      for (const msg of messages) {
-        if (!msg?.id) continue
-        if (msg.role !== "user" && msg.role !== "assistant" && msg.role !== "system") continue
-        const normalized = normalizeContentForStorage(msg.content)
-        if (!normalized.trim()) continue
-        draftMessages.push({
-          id: msg.id,
-          role: msg.role,
-          content: normalized,
-          metadata: msg.metadata,
-          createdAt: msg.createdAt ? new Date(msg.createdAt).toISOString() : new Date().toISOString(),
-        })
-      }
-
-      if (draftMessages.length === 0) return
-      writeDraft({
-        mode,
-        profileId: currentProfileId,
-        messages: draftMessages,
-        updatedAt: new Date().toISOString(),
-      })
-    }, DRAFT_SAVE_DEBOUNCE_MS)
-
-    return () => clearTimeout(timeoutId)
-  }, [messages, persistenceEnabled, currentChat, mode, currentProfileId, normalizeContentForStorage])
-
-  useEffect(() => {
-    if (!persistenceEnabled || !currentChat) return
-    clearDraft(mode, currentProfileId)
-  }, [persistenceEnabled, currentChat?.id, mode, currentProfileId])
-
-  useEffect(() => {
-    if (persistenceEnabled && messages.length === 0) {
-      clearDraft(mode, currentProfileId)
-    }
-  }, [persistenceEnabled, messages.length, mode, currentProfileId])
-
   // Load persisted messages when authenticated and chat is available
   const hasLoadedRef = useRef<string | null>(null)
   const isRestoringRef = useRef(false)
@@ -821,10 +699,7 @@ export default function FuturisticRadhika() {
       try {
         isRestoringRef.current = true
         persistedMessageIdsRef.current = new Set()
-        console.log("🔄 Loading persisted messages for chat:", currentChat.id)
         const savedMessages = await loadPersistedMessages()
-        console.log("📦 Loaded", savedMessages.length, "messages from DB")
-        
         // Convert to the format useChat expects
         const formattedMessages = savedMessages.map((msg) => ({
           id: msg.id,
@@ -833,41 +708,25 @@ export default function FuturisticRadhika() {
           createdAt: msg.createdAt ? new Date(msg.createdAt as string) : undefined,
           isFavorite: msg.isFavorite,
         }))
-        
-        console.log("📋 Formatted messages:", formattedMessages.map(m => ({ id: m.id, role: m.role, contentLength: m.content?.length })))
-        const persistedClientIds = new Set(
-          savedMessages
-            .map((msg: any) => msg?.metadata?.client_id as string | undefined)
-            .filter((id): id is string => Boolean(id))
-        )
         // Track restored IDs so we don't immediately attempt to re-persist them
         for (const msg of savedMessages) {
           if (msg.id) {
             persistedMessageIdsRef.current.add(msg.id)
-          }
-          const clientId = (msg as any)?.metadata?.client_id
-          if (clientId) {
-            persistedMessageIdsRef.current.add(clientId)
           }
         }
         // Merge persisted messages with any existing local messages to avoid
         // clobbering optimistic UI entries (e.g., the first user message).
         const localMessages = messagesByModeRef.current[mode] ?? messages ?? []
 
-        // Build map of messages from persisted list (DB-first)
-        // Use DB messages as source of truth to prevent duplication
+        // Build map of messages from persisted list (DB-first), then overlay local messages
         const map = new Map<string, any>()
         for (const m of formattedMessages) {
           if (m?.id) map.set(m.id, m)
         }
-        
-        // Only add local messages that aren't already in DB
         for (const lm of localMessages) {
-          if (lm?.id && !map.has(lm.id)) {
-            // Check if this local message was persisted under a different ID
-            if (persistedClientIds.has(lm.id)) continue
-            // Add local message only if it's truly new
-            map.set(lm.id, lm)
+          if (lm?.id) {
+            // Prefer local message content (optimistic) over DB when IDs collide
+            map.set(lm.id, { ...map.get(lm.id), ...lm })
           }
         }
 
@@ -876,11 +735,6 @@ export default function FuturisticRadhika() {
           const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0
           return ta - tb
         })
-
-        console.log("✅ Merged messages:", merged.length, "total")
-        console.log("   - User messages:", merged.filter(m => m.role === 'user').length)
-        console.log("   - Assistant messages:", merged.filter(m => m.role === 'assistant').length)
-        console.log("   - System messages:", merged.filter(m => m.role === 'system').length)
 
         setMessages(merged)
         messagesByModeRef.current[mode] = merged
@@ -903,7 +757,6 @@ export default function FuturisticRadhika() {
 
   // Persist new messages to database
   const previousMessagesLengthRef = useRef(0)
-  const lastProcessedMessageIdRef = useRef<string | null>(null)
   
   useEffect(() => {
     if (!persistenceEnabled || !currentChat || messages.length === 0) return
@@ -917,7 +770,7 @@ export default function FuturisticRadhika() {
     // Only persist if we have new messages
     if (messages.length > previousMessagesLengthRef.current) {
       const newMessages = messages.slice(previousMessagesLengthRef.current)
-      console.log("📝 New messages detected:", newMessages.length, newMessages.map((m: any) => ({ id: m.id, role: m.role })))
+      console.log("New messages detected:", newMessages.length, newMessages.map((m: any) => ({ id: m.id, role: m.role })))
       
       // Process messages sequentially
       ;(async () => {
@@ -927,16 +780,14 @@ export default function FuturisticRadhika() {
           const trimmed = normalizedContent.trim()
           
           // Skip if we've already persisted this ID
-          if (persistedMessageIdsRef.current.has(msg.id)) {
-            console.log("⏭️  Skipping already persisted message:", msg.id)
-            continue
-          }
+          if (persistedMessageIdsRef.current.has(msg.id)) continue
           
-          // Persist user messages immediately
+          // Only persist user messages here
+          // Assistant messages will be persisted when streaming completes
           if (msg.role === "user" && trimmed) {
-            console.log("💾 Persisting user message:", msg.id, "to chat:", currentChat?.id)
+            console.log("Persisting user message:", msg.id, "to chat:", currentChat?.id)
             try {
-              const savedMessage = await chatService.addMessage(
+              await chatService.addMessage(
                 currentChat.id,
                 msg.role,
                 normalizedContent,
@@ -944,50 +795,59 @@ export default function FuturisticRadhika() {
                 msg.id
               )
               persistedMessageIdsRef.current.add(msg.id)
-              if (savedMessage) {
-                console.log("✅ User message persisted successfully")
-              } else {
-                console.warn("⚠️  User message queued for retry.")
-              }
+              console.log("✅ User message persisted successfully")
             } catch (err) {
               console.error("❌ Failed to persist user message:", err)
             }
-          } 
-          // Persist assistant messages ONLY when they're complete (not streaming)
-          // We detect completion by checking if this is NOT the last message in the array
-          // or if isLoading is false
-          else if (msg.role === "assistant" && trimmed) {
-            const isLastMessage = messages[messages.length - 1]?.id === msg.id
-            const isComplete = !isLoading || !isLastMessage
-            
-            if (isComplete) {
-              console.log("💾 Persisting assistant message:", msg.id, "to chat:", currentChat?.id)
-              try {
-                const savedMessage = await chatService.addMessage(
-                  currentChat.id,
-                  msg.role,
-                  normalizedContent,
-                  msg.metadata,
-                  msg.id
-                )
-                persistedMessageIdsRef.current.add(msg.id)
-                if (savedMessage) {
-                  console.log("✅ Assistant message persisted successfully")
-                } else {
-                  console.warn("⚠️  Assistant message queued for retry.")
-                }
-              } catch (err) {
-                console.error("❌ Failed to persist assistant message:", err)
-              }
-            } else {
-              console.log("⏸️  Waiting for assistant message to complete streaming:", msg.id)
-            }
+          } else {
+            console.log("Skipping non-user message in effect:", msg.role, msg.id)
           }
         }
       })()
     }
     previousMessagesLengthRef.current = messages.length
-  }, [messages, persistenceEnabled, currentChat, persistMessage, normalizeContentForStorage, isLoading])
+  }, [messages, persistenceEnabled, currentChat, persistMessage, normalizeContentForStorage])
+
+  // Persist assistant message when streaming stops (detected by isLoading change)
+  const previousIsLoadingRef = useRef(false)
+  useEffect(() => {
+    // When loading transitions from true to false, the streaming has completed
+    if (previousIsLoadingRef.current && !isLoading) {
+      console.log("🎯 Stream completed, checking for assistant messages to persist")
+      
+      // Find the most recent assistant message that hasn't been persisted
+      const assistantMessages = messages.filter((m: any) => m.role === 'assistant')
+      if (assistantMessages.length > 0) {
+        const lastAssistantMessage = assistantMessages[assistantMessages.length - 1]
+        console.log("Last assistant message:", lastAssistantMessage.id, "Already persisted:", persistedMessageIdsRef.current.has(lastAssistantMessage.id))
+        
+        if (persistenceEnabled && currentChat && lastAssistantMessage.id && !persistedMessageIdsRef.current.has(lastAssistantMessage.id)) {
+          const normalizedContent = normalizeContentForStorage(lastAssistantMessage.content)
+          if (normalizedContent.trim()) {
+            console.log("Persisting assistant message:", lastAssistantMessage.id)
+            ;(async () => {
+              try {
+                await chatService.addMessage(
+                  currentChat.id,
+                  "assistant",
+                  normalizedContent,
+                  lastAssistantMessage.metadata,
+                  lastAssistantMessage.id
+                )
+                persistedMessageIdsRef.current.add(lastAssistantMessage.id)
+                console.log("✅ Assistant message persisted successfully after stream completion")
+              } catch (err) {
+                console.error("❌ Failed to persist assistant message after stream:", err)
+              }
+            })()
+          }
+        }
+      } else {
+        console.log("No assistant messages found after stream completion")
+      }
+    }
+    previousIsLoadingRef.current = isLoading
+  }, [isLoading, persistenceEnabled, currentChat, messages, normalizeContentForStorage])
 
   useEffect(() => {
     if (!canUseMode(mode)) {
@@ -1173,9 +1033,6 @@ export default function FuturisticRadhika() {
     setError(null)
     clearSpeechError()
     stopSpeaking()
-    autoCreateRequestedRef.current = false
-    autoCreateMessageCountRef.current = 0
-    draftRestoredForSessionRef.current = false
   }, [setMessages, clearSpeechError, stopSpeaking])
 
   // Clear chat UI when user signs out elsewhere in the app
@@ -1247,19 +1104,8 @@ export default function FuturisticRadhika() {
     if (messages.length === 0) return
     if (isRestoringRef.current) return
     if (isCreatingChatRef.current) return
-    if (!autoCreateRequestedRef.current) return
-    if (messages.length <= autoCreateMessageCountRef.current) return
 
-    const hasUserMessage = messages.some((msg: any) => {
-      if (!msg || msg.role !== "user") return false
-      return Boolean(normalizeContentForStorage(msg.content).trim())
-    })
-    if (!hasUserMessage) {
-      autoCreateRequestedRef.current = false
-      return
-    }
-
-    console.log("Auto-creating chat session after first user message...")
+    console.log("🔄 Auto-creating chat session after first message...")
     isCreatingChatRef.current = true
 
     // Capture any local messages present so we can persist them after the chat is created.
@@ -1272,29 +1118,19 @@ export default function FuturisticRadhika() {
           // Mark as loaded to prevent immediate reload from clearing local messages
           hasLoadedRef.current = newChat.id
           persistedMessageIdsRef.current = new Set()
-          const allowAssistantPersist = draftRestoredForSessionRef.current
 
           try {
             for (const msg of pendingMessages) {
               if (!msg || !msg.id) continue
               if (persistedMessageIdsRef.current.has(msg.id)) continue
-              if (msg.role !== "user" && !(allowAssistantPersist && msg.role === "assistant")) continue
+              if (msg.role !== "user") continue
 
               const normalized = normalizeContentForStorage(msg.content)
               if (!normalized || !normalized.trim()) continue
 
               try {
-                const savedMessage = await chatService.addMessage(
-                  newChat.id,
-                  msg.role,
-                  normalized,
-                  msg.metadata,
-                  msg.id
-                )
+                await chatService.addMessage(newChat.id, msg.role, normalized, msg.metadata, msg.id)
                 persistedMessageIdsRef.current.add(msg.id)
-                if (!savedMessage) {
-                  console.warn("Pending message queued for retry during auto-create.")
-                }
               } catch (err) {
                 console.error("Failed to persist pending message during auto-create:", err)
               }
@@ -1310,11 +1146,9 @@ export default function FuturisticRadhika() {
         console.error("❌ Failed to auto-create chat after first message:", err)
       } finally {
         isCreatingChatRef.current = false
-        autoCreateRequestedRef.current = false
-        draftRestoredForSessionRef.current = false
       }
     })()
-  }, [messages.length, persistenceEnabled, currentChat, createNewChat, refreshChats, normalizeContentForStorage])
+  }, [messages.length, persistenceEnabled, currentChat, createNewChat, refreshChats])
 
   // Create a new chat session
   const handleNewChat = useCallback(async () => {
@@ -1329,9 +1163,6 @@ export default function FuturisticRadhika() {
     hasLoadedRef.current = null
     previousMessagesLengthRef.current = 0
     persistedMessageIdsRef.current = new Set()
-    autoCreateRequestedRef.current = false
-    autoCreateMessageCountRef.current = 0
-    draftRestoredForSessionRef.current = false
     // Detach from any current chat; a new chat will be created when the first message is sent
     if (clearCurrentChat) {
       clearCurrentChat()
@@ -1931,7 +1762,7 @@ export default function FuturisticRadhika() {
         if (currentPersistenceEnabled && chatToUse && placeholderId && !persistedMessageIdsRef.current.has(placeholderId)) {
           console.log(`💾 Persisting image message: ${placeholderId} 📸 to chat: ${chatToUse.id}`)
           try {
-            const savedMessage = await chatService.addMessage(
+            await chatService.addMessage(
               chatToUse.id,
               "assistant",
               markdown,
@@ -1939,11 +1770,7 @@ export default function FuturisticRadhika() {
               placeholderId
             )
             persistedMessageIdsRef.current.add(placeholderId)
-            if (savedMessage) {
-              console.log("✅ Image message persisted successfully")
-            } else {
-              console.warn("Image message queued for retry.")
-            }
+            console.log("✅ Image message persisted successfully")
           } catch (err) {
             console.error("❌ Failed to persist image message:", err)
           }

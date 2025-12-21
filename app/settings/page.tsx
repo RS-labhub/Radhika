@@ -44,7 +44,6 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { createClient } from "@/lib/supabase/client"
-import { retryWithReset } from "@/lib/supabase/safe"
 import type { UserGender, UserAge, ConversationTone } from "@/types/chat"
 
 interface Provider {
@@ -199,13 +198,10 @@ export default function SettingsPage() {
         setEmail(user.email || "")
 
         // Load user profile from users table
-        const { data: userData, error: userError } = (await retryWithReset(
-          () => (supabase.from("users") as any)
-            .select("display_name, pet_name, avatar_url")
-            .eq("id", user.id)
-            .single(),
-          10000
-        )) as any
+        const { data: userData, error: userError } = await (supabase.from("users") as any)
+          .select("display_name, pet_name, avatar_url")
+          .eq("id", user.id)
+          .single()
 
         if (userError) {
           console.error("Error loading user data:", userError)
@@ -227,13 +223,10 @@ export default function SettingsPage() {
         }
 
         // Load user personalization
-        const { data: personalizationData, error: personalizationError } = (await retryWithReset(
-          () => (supabase.from("user_settings") as any)
-            .select("personalization")
-            .eq("user_id", user.id)
-            .single(),
-          10000
-        )) as any
+        const { data: personalizationData, error: personalizationError } = await (supabase.from("user_settings") as any)
+          .select("personalization")
+          .eq("user_id", user.id)
+          .single()
 
         if (personalizationError) {
           // Log a warning instead of console.error to avoid Next dev overlay treating this as an unhandled client error.
@@ -553,7 +546,7 @@ export default function SettingsPage() {
                 {model}
               </SelectItem>
             ))}
-            <SelectItem value={CUSTOM_MODEL_OPTION}>Add your own model...</SelectItem>
+            <SelectItem value={CUSTOM_MODEL_OPTION}>Add your own model…</SelectItem>
           </SelectContent>
         </Select>
         {isCustom && (
@@ -1019,4 +1012,3 @@ export default function SettingsPage() {
     </div>
   )
 }
-

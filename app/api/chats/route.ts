@@ -15,13 +15,12 @@ export async function GET(request: NextRequest) {
     const mode = searchParams.get("mode")
     const profileId = searchParams.get("profileId")
     const includeArchived = searchParams.get("includeArchived") === "true"
-    const limit = parseInt(searchParams.get("limit") || "30", 10)
+    const limit = parseInt(searchParams.get("limit") || "50", 10)
 
     let query = supabase
       .from("chats")
-      .select("id,title,mode,profile_id,last_message_at,created_at,is_archived,deleted_at")
+      .select("*")
       .eq("user_id", user.id)
-      .is("deleted_at", null)
       .order("last_message_at", { ascending: false, nullsFirst: false })
       .limit(limit)
 
@@ -82,7 +81,7 @@ export async function POST(request: NextRequest) {
         profile_id: profileId || null,
         last_message_at: new Date().toISOString(),
       })
-      .select("id,title,mode,profile_id,last_message_at,created_at,is_archived,deleted_at")
+      .select()
       .single()
 
     if (error) {

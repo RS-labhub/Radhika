@@ -12,7 +12,6 @@ import { cn } from "@/lib/utils"
 export default function SharedChatPage() {
   const params = useParams()
   const token = params.token as string
-  const messageLimit = 200
   
   const [chat, setChat] = useState<Chat | null>(null)
   const [messages, setMessages] = useState<any[]>([])
@@ -60,7 +59,7 @@ export default function SharedChatPage() {
         setChat(sharedChat)
 
         // Load messages for this chat
-        const chatMessages = await chatService.getMessages(sharedChat.id, { limit: messageLimit })
+        const chatMessages = await chatService.getMessages(sharedChat.id)
         const formattedMessages = chatMessages.map((msg: ChatMessage) => ({
           id: msg.id,
           role: msg.role,

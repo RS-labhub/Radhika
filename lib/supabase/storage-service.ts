@@ -2,15 +2,12 @@
  * Supabase Storage Service for Chat Images
  */
 
-import { getSupabaseClient } from "@/lib/supabase/client"
-import { retryWithReset } from "@/lib/supabase/safe"
+import { createClient } from "@/lib/supabase/client"
 
 const BUCKET_NAME = "chat-images"
 
 export class StorageService {
-  private get supabase() {
-    return getSupabaseClient() as any
-  }
+  private supabase = createClient()
 
   /**
    * Upload an image to Supabase Storage
@@ -22,15 +19,12 @@ export class StorageService {
     const fileExt = file.name.split(".").pop()
     const fileName = `${userId}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`
 
-    const { data, error } = await retryWithReset(
-      () => this.supabase.storage
-        .from(BUCKET_NAME)
-        .upload(fileName, file, {
-          cacheControl: "3600",
-          upsert: false,
-        }),
-      10000
-    ) as any
+    const { data, error } = await this.supabase.storage
+      .from(BUCKET_NAME)
+      .upload(fileName, file, {
+        cacheControl: "3600",
+        upsert: false,
+      })
 
     if (error) {
       console.error("Image upload error:", error)
@@ -40,7 +34,7 @@ export class StorageService {
     // Get public URL
     const { data: { publicUrl } } = this.supabase.storage
       .from(BUCKET_NAME)
-      .getPublicUrl(data.path) as any
+      .getPublicUrl(data.path)
 
     return publicUrl
   }
@@ -60,12 +54,9 @@ export class StorageService {
 
     const filePath = pathMatch[1]
 
-    const { error } = await retryWithReset(
-      () => this.supabase.storage
-        .from(BUCKET_NAME)
-        .remove([filePath]),
-      10000
-    ) as any
+    const { error } = await this.supabase.storage
+      .from(BUCKET_NAME)
+      .remove([filePath])
 
     if (error) {
       console.error("Image delete error:", error)
@@ -78,12 +69,9 @@ export class StorageService {
    * @param userId - User ID
    */
   async deleteUserImages(userId: string): Promise<void> {
-    const { data: files, error: listError } = await retryWithReset(
-      () => this.supabase.storage
-        .from(BUCKET_NAME)
-        .list(userId),
-      10000
-    ) as any
+    const { data: files, error: listError } = await this.supabase.storage
+      .from(BUCKET_NAME)
+      .list(userId)
 
     if (listError) {
       console.error("List user images error:", listError)
@@ -94,14 +82,11 @@ export class StorageService {
       return
     }
 
-  const filePaths = files.map((file: any) => `${userId}/${file.name}`)
+    const filePaths = files.map((file) => `${userId}/${file.name}`)
 
-    const { error: deleteError } = await retryWithReset(
-      () => this.supabase.storage
-        .from(BUCKET_NAME)
-        .remove(filePaths),
-      10000
-    ) as any
+    const { error: deleteError } = await this.supabase.storage
+      .from(BUCKET_NAME)
+      .remove(filePaths)
 
     if (deleteError) {
       console.error("Delete user images error:", deleteError)
