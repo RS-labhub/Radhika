@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { chatService } from "@/lib/supabase/chat-service"
-import type { Chat, ChatMessage, Mode } from "@/types/chat"
+import type { Chat, Mode } from "@/types/chat"
 import { useAuth } from "@/contexts/auth-context"
+import { getPendingMessages } from "@/lib/supabase/pending-messages"
 
 export interface LocalMessage {
   id: string
@@ -13,6 +14,8 @@ export interface LocalMessage {
   metadata?: Record<string, any>
   isFavorite?: boolean
 }
+
+const MESSAGE_LOAD_LIMIT = 200
 
 export function useChatPersistence(mode: Mode, profileId?: string) {
   const { user, isAuthenticated } = useAuth()
@@ -45,19 +48,22 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
     
     // Try to load existing chat in background (optional, silent failure)
     // Only auto-load if there are existing chats, don't create new ones
-    setTimeout(() => {
+    const loadTimer = setTimeout(() => {
       loadExistingChat()
         .then(() => {
           console.log("Background chat load completed")
         })
         .catch(err => {
           console.log("Could not load existing chat:", err.message)
-          // No chat exists - this is OK, user will create one on first message
+          // No chat exists or timeout - this is OK, user will create one on first message
         })
         .finally(() => {
           setIsLoadingChat(false)
         })
     }, 1000) // Delay by 1 second to not interfere with page load
+
+    // Cleanup timeout on unmount
+    return () => clearTimeout(loadTimer)
   }, [isAuthenticated, user, hasAttemptedLoad])
 
   const loadExistingChat = async () => {
@@ -71,8 +77,9 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
       
       console.log("Loading chats for mode:", mode, "profile:", profileId)
       
-      // Try to get existing chats for this mode/profile - NO TIMEOUT
-      const chats = await chatService.getChats(mode, profileId)
+      // Try to get existing chats for this mode/profile with a limit for performance
+      // Load only the 20 most recent chats initially
+      const chats = await chatService.getChats(mode, profileId, 20)
       
       console.log("Found chats:", chats.length)
       
@@ -83,10 +90,14 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
       } else {
         setCurrentChat(null)
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to load chat:", err)
       // Don't throw - just set to null so user can still use the app
       setCurrentChat(null)
+      // Show more helpful error message
+      if (err.message?.includes('timeout')) {
+        console.warn("Chat loading timed out. You can still create new chats.")
+      }
     } finally {
       setIsLoadingChat(false)
     }
@@ -100,8 +111,23 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
     }
 
     try {
-      const messages = await chatService.getMessages(targetChatId)
-      return messages.map(msg => ({
+      const messages = await chatService.getMessages(targetChatId, { limit: MESSAGE_LOAD_LIMIT })
+      const persistedClientIds = new Set(
+        messages
+          .map((msg) => (msg.metadata as any)?.client_id as string | undefined)
+          .filter((id): id is string => Boolean(id))
+      )
+
+      const pending = getPendingMessages(targetChatId, user?.id).filter((msg) => !persistedClientIds.has(msg.id))
+      const pendingMessages: LocalMessage[] = pending.map((msg) => ({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+        createdAt: msg.createdAt,
+        metadata: msg.metadata || undefined,
+      }))
+
+      const persistedMessages: LocalMessage[] = messages.map(msg => ({
         id: msg.id,
         role: msg.role,
         content: msg.content,
@@ -109,11 +135,24 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
         metadata: msg.metadata,
         isFavorite: Boolean((msg as any).is_favorite),
       }))
+      
+      return [...persistedMessages, ...pendingMessages].sort((a, b) => {
+        const ta = a.createdAt ? new Date(a.createdAt as any).getTime() : 0
+        const tb = b.createdAt ? new Date(b.createdAt as any).getTime() : 0
+        return ta - tb
+      })
     } catch (err) {
       console.error("Failed to load messages:", err)
-      return []
+      const pending = getPendingMessages(targetChatId, user?.id)
+      return pending.map((msg) => ({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+        createdAt: msg.createdAt,
+        metadata: msg.metadata || undefined,
+      }))
     }
-  }, [currentChat?.id, isAuthenticated])
+  }, [currentChat?.id, isAuthenticated, user?.id])
 
   // Save messages to database
   const saveMessages = useCallback(async (messages: LocalMessage[]) => {
@@ -201,11 +240,50 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
       // Fetch chats for the current mode and profile
       // This ensures we only show chats relevant to the current context
       return await chatService.getChats(mode, profileId)
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to get chats:", err)
+      // Return empty array instead of throwing to prevent blocking the UI
+      // Log the specific error for debugging
+      if (err.message?.includes('timeout')) {
+        console.warn("Chat loading timed out - this may indicate a slow connection or large dataset")
+      }
       return []
     }
   }, [isAuthenticated, mode, profileId])
+
+  useEffect(() => {
+    if (!isAuthenticated) return
+
+    let cancelled = false
+    const flush = async () => {
+      try {
+        await chatService.flushPendingMessages(currentChat?.id)
+      } catch (err) {
+        if (!cancelled) {
+          console.warn("Failed to flush pending messages:", err)
+        }
+      }
+    }
+
+    flush()
+
+    const intervalId = setInterval(() => {
+      flush()
+    }, 15000)
+
+    const handleOnline = () => flush()
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("online", handleOnline)
+    }
+
+    return () => {
+      cancelled = true
+      clearInterval(intervalId)
+      if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+        window.removeEventListener("online", handleOnline)
+      }
+    }
+  }, [isAuthenticated, currentChat?.id])
 
   return {
     currentChat,

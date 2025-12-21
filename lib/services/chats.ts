@@ -1,4 +1,5 @@
 import { getSupabaseClient } from "../supabase/client"
+import { retryWithReset } from "../supabase/safe"
 import type { Chat, ChatInsert, ChatMessage, ChatMessageInsert } from "../../types/database"
 
 export async function getChats(userId: string, options?: {
@@ -8,29 +9,37 @@ export async function getChats(userId: string, options?: {
   limit?: number
 }): Promise<Chat[]> {
   const supabase = getSupabaseClient() as any
-  let query = supabase
-    .from("chats")
-    .select("*")
-    .eq("user_id", userId)
-    .order("last_message_at", { ascending: false, nullsFirst: false })
+  const buildQuery = () => {
+    let query = supabase
+      .from("chats")
+      .select("id,title,mode,profile_id,last_message_at,created_at,is_archived,deleted_at")
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .order("last_message_at", { ascending: false, nullsFirst: false })
 
-  if (options?.mode) {
-    query = query.eq("mode", options.mode)
+    if (options?.mode) {
+      query = query.eq("mode", options.mode)
+    }
+
+    if (options?.profileId) {
+      query = query.eq("profile_id", options.profileId)
+    }
+
+    if (!options?.includeArchived) {
+      query = query.eq("is_archived", false)
+    }
+
+    if (options?.limit) {
+      query = query.limit(options.limit)
+    } else {
+      // Default limit to 50 most recent chats for performance
+      query = query.limit(30)
+    }
+
+    return query
   }
 
-  if (options?.profileId) {
-    query = query.eq("profile_id", options.profileId)
-  }
-
-  if (!options?.includeArchived) {
-    query = query.eq("is_archived", false)
-  }
-
-  if (options?.limit) {
-    query = query.limit(options.limit)
-  }
-
-  const { data, error } = await query
+  const { data, error } = await retryWithReset(buildQuery, 20000) as any
 
   if (error) throw error
   return data || []
@@ -42,11 +51,14 @@ export async function getRecentChats(userId: string, limit = 10): Promise<Chat[]
 
 export async function getChat(chatId: string): Promise<Chat | null> {
   const supabase = getSupabaseClient() as any
-  const { data, error } = await supabase
-    .from("chats")
-    .select("*")
-    .eq("id", chatId)
-    .single()
+  const { data, error } = await retryWithReset(
+    () => supabase
+      .from("chats")
+      .select("id,title,mode,profile_id,last_message_at,created_at,is_archived,deleted_at")
+      .eq("id", chatId)
+      .single(),
+    10000
+  ) as any
 
   if (error && error.code !== "PGRST116") throw error
   return data
@@ -59,17 +71,20 @@ export async function createChat(
   profileId?: string
 ): Promise<Chat> {
   const supabase = getSupabaseClient() as any
-  const { data, error } = await supabase
-    .from("chats")
-    .insert({
-      user_id: userId,
-      mode,
-      title,
-      profile_id: profileId || null,
-      last_message_at: new Date().toISOString(),
-    })
-    .select()
-    .single()
+  const { data, error } = await retryWithReset(
+    () => supabase
+      .from("chats")
+      .insert({
+        user_id: userId,
+        mode,
+        title,
+        profile_id: profileId || null,
+        last_message_at: new Date().toISOString(),
+      })
+      .select("id,title,mode,profile_id,last_message_at,created_at,is_archived,deleted_at")
+      .single(),
+    20000
+  ) as any
 
   if (error) throw error
   // Increment the persisted counter so deleting chats doesn't remove this count
@@ -92,15 +107,18 @@ export async function updateChat(
   updates: Partial<Pick<Chat, "title" | "is_archived" | "profile_id">>
 ): Promise<Chat> {
   const supabase = getSupabaseClient() as any
-  const { data, error } = await supabase
-    .from("chats")
-    .update({
-      ...updates,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", chatId)
-    .select()
-    .single()
+  const { data, error } = await retryWithReset(
+    () => supabase
+      .from("chats")
+      .update({
+        ...updates,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", chatId)
+      .select()
+      .single(),
+    10000
+  ) as any
 
   if (error) throw error
   return data
@@ -116,10 +134,13 @@ export async function unarchiveChat(chatId: string): Promise<Chat> {
 
 export async function deleteChat(chatId: string): Promise<void> {
   const supabase = getSupabaseClient() as any
-  const { error } = await supabase
-    .from("chats")
-    .delete()
-    .eq("id", chatId)
+  const { error } = await retryWithReset(
+    () => supabase
+      .from("chats")
+      .delete()
+      .eq("id", chatId),
+    10000
+  ) as any
 
   if (error) throw error
 }
@@ -128,11 +149,14 @@ export async function deleteChat(chatId: string): Promise<void> {
 
 export async function getChatMessages(chatId: string): Promise<ChatMessage[]> {
   const supabase = getSupabaseClient() as any
-  const { data, error } = await supabase
-    .from("chat_messages")
-    .select("*")
-    .eq("chat_id", chatId)
-    .order("created_at", { ascending: true })
+  const { data, error } = await retryWithReset(
+    () => supabase
+      .from("chat_messages")
+      .select("id,title,mode,profile_id,last_message_at,created_at,is_archived,deleted_at")
+      .eq("chat_id", chatId)
+      .order("created_at", { ascending: true }),
+    10000
+  ) as any
 
   if (error) throw error
   return data || []
@@ -147,29 +171,38 @@ export async function addMessage(
   const supabase = getSupabaseClient() as any
   
   // Add the message
-  const { data: message, error: messageError } = await supabase
-    .from("chat_messages")
-    .insert({
-      chat_id: chatId,
-      role,
-      content,
-      metadata: metadata || null,
-    })
-    .select()
-    .single()
+  const { data: message, error: messageError } = await retryWithReset(
+    () => supabase
+      .from("chat_messages")
+      .insert({
+        chat_id: chatId,
+        role,
+        content,
+        metadata: metadata || null,
+      })
+      .select()
+      .single(),
+    10000
+  ) as any
 
   if (messageError) throw messageError
 
   // Update the chat's last_message_at
-  await supabase
-    .from("chats")
-    .update({ last_message_at: new Date().toISOString() })
-    .eq("id", chatId)
+  await retryWithReset(
+    () => supabase
+      .from("chats")
+      .update({ last_message_at: new Date().toISOString() })
+      .eq("id", chatId),
+    10000
+  ) as any
   
   // Increment the persisted message counter for the owner of this chat (best-effort)
   try {
     // Get chat owner and mode
-    const { data: chatRow } = await supabase.from("chats").select("user_id").eq("id", chatId).single()
+    const { data: chatRow } = await retryWithReset(
+      () => supabase.from("chats").select("user_id").eq("id", chatId).single(),
+      10000
+    ) as any
     const ownerId = chatRow?.user_id
     if (ownerId) {
       await supabase.rpc("increment_user_stats", {
@@ -187,25 +220,31 @@ export async function addMessage(
 
 export async function toggleMessageFavorite(messageId: string, isFavorite: boolean): Promise<void> {
   const supabase = getSupabaseClient() as any
-  const { error } = await supabase
-    .from("chat_messages")
-    .update({ is_favorite: isFavorite })
-    .eq("id", messageId)
+  const { error } = await retryWithReset(
+    () => supabase
+      .from("chat_messages")
+      .update({ is_favorite: isFavorite })
+      .eq("id", messageId),
+    10000
+  ) as any
 
   if (error) throw error
 }
 
 export async function getFavoriteMessages(userId: string): Promise<ChatMessage[]> {
   const supabase = getSupabaseClient() as any
-  const { data, error } = await supabase
-    .from("chat_messages")
-    .select(`
-      *,
-      chats!inner(user_id)
-    `)
-    .eq("chats.user_id", userId)
-    .eq("is_favorite", true)
-    .order("created_at", { ascending: false })
+  const { data, error } = await retryWithReset(
+    () => supabase
+      .from("chat_messages")
+      .select(`
+        *,
+        chats!inner(user_id)
+      `)
+      .eq("chats.user_id", userId)
+      .eq("is_favorite", true)
+      .order("created_at", { ascending: false }),
+    10000
+  ) as any
 
   if (error) throw error
   return data || []
@@ -228,11 +267,14 @@ export async function getChatStats(userId: string): Promise<{
   const supabase = getSupabaseClient() as any
   // Prefer the persisted counters in user_stats. Fall back to live counts if missing.
   try {
-    const { data: statsRow, error: statsError } = await supabase
-      .from("user_stats")
-      .select("total_chats, total_messages, chats_by_mode")
-      .eq("user_id", userId)
-      .single()
+    const { data: statsRow, error: statsError } = await retryWithReset(
+      () => supabase
+        .from("user_stats")
+        .select("total_chats, total_messages, chats_by_mode")
+        .eq("user_id", userId)
+        .single(),
+      10000
+    ) as any
 
     if (!statsError && statsRow) {
       return {
@@ -247,10 +289,13 @@ export async function getChatStats(userId: string): Promise<{
   }
 
   // Fallback: compute from live data (keeps previous behavior)
-  const { data: chatsRaw, error: chatsError } = await supabase
-    .from("chats")
-    .select("id, mode")
-    .eq("user_id", userId)
+  const { data: chatsRaw, error: chatsError } = await retryWithReset(
+    () => supabase
+      .from("chats")
+      .select("id, mode")
+      .eq("user_id", userId),
+    10000
+  ) as any
 
   const chats = (chatsRaw as Array<{ id: string; mode: string }> ) || []
 
@@ -260,10 +305,13 @@ export async function getChatStats(userId: string): Promise<{
   
   let totalMessages = 0
   if (chatIds.length > 0) {
-    const { count, error: messagesError } = await supabase
-      .from("chat_messages")
-      .select("*", { count: "exact", head: true })
-      .in("chat_id", chatIds)
+    const { count, error: messagesError } = await retryWithReset(
+      () => supabase
+        .from("chat_messages")
+        .select("*", { count: "exact", head: true })
+        .in("chat_id", chatIds),
+      10000
+    ) as any
 
     if (messagesError) throw messagesError
     totalMessages = count || 0
