@@ -21,6 +21,8 @@ import {
   Volume2,
   VolumeX,
   Download,
+  Cloud,
+  CloudOff,
 } from "lucide-react"
 import { ProfileSelector } from "./profile-selector"
 
@@ -47,6 +49,8 @@ interface ChatTopbarProps {
   currentProfileId?: string | null
   onProfileSelect?: (profileId: string | null) => void
   onExportChat?: () => void
+  pendingQueueCount?: number
+  onSyncQueue?: () => void
 }
 
 export function ChatTopbar({
@@ -71,6 +75,8 @@ export function ChatTopbar({
   currentProfileId,
   onProfileSelect,
   onExportChat,
+  pendingQueueCount = 0,
+  onSyncQueue,
 }: ChatTopbarProps) {
   const isPixel = uiStyle === "pixel"
   const CurrentModeIcon = modeMeta.icon
@@ -211,6 +217,29 @@ export function ChatTopbar({
               {voiceEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
             </Button>
           ) : null}
+          {/* Pending queue indicator */}
+          {isAuthenticated && pendingQueueCount > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onSyncQueue}
+              className={cn(
+                controlButton,
+                "relative",
+                isPixel
+                  ? "text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
+                  : "text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300",
+              )}
+              aria-label={`${pendingQueueCount} messages pending sync. Click to retry.`}
+              title={`${pendingQueueCount} messages pending sync`}
+            >
+              <CloudOff className="h-4 w-4" />
+              <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[0.6rem] font-bold text-white">
+                {pendingQueueCount > 9 ? "9+" : pendingQueueCount}
+              </span>
+            </Button>
+          )}
           {!isAuthenticated && (
             <Button
               type="button"

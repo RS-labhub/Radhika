@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { createServerSupabaseClient } from "../../../../lib/supabase/server"
+import { robustQuery, errorResponse, successResponse } from "../../../../lib/api-utils"
 
 // GET /api/chats/[chatId] - Get a specific chat with messages
 export async function GET(
@@ -7,44 +8,53 @@ export async function GET(
   { params }: { params: Promise<{ chatId: string }> }
 ) {
   try {
-  const supabase = (await createServerSupabaseClient()) as any
-    const { data: { user } } = await supabase.auth.getUser()
+    const supabase = (await createServerSupabaseClient()) as any
     const { chatId } = await params
 
+    // Combined auth check
+    const authResult = await robustQuery(
+      () => supabase.auth.getUser(),
+      { operationName: "Auth check", timeout: 5000 }
+    ) as { data: { user: any } }
+
+    const user = authResult?.data?.user
     if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+      return errorResponse("Unauthorized", 401)
     }
 
-    // Get the chat
-    const { data: chat, error: chatError } = await supabase
-      .from("chats")
-      .select("*")
-      .eq("id", chatId)
-      .eq("user_id", user.id)
-      .single()
+    // Fetch chat and messages in parallel to reduce total time
+    const [chatResult, messagesResult] = await Promise.all([
+      robustQuery(
+        () => supabase
+          .from("chats")
+          .select("*")
+          .eq("id", chatId)
+          .eq("user_id", user.id)
+          .single(),
+        { operationName: "Fetch chat", timeout: 8000 }
+      ) as Promise<{ data: any; error: any }>,
+      robustQuery(
+        () => supabase
+          .from("chat_messages")
+          .select("*")
+          .eq("chat_id", chatId)
+          .order("created_at", { ascending: true }),
+        { operationName: "Fetch messages", timeout: 8000 }
+      ) as Promise<{ data: any[]; error: any }>
+    ])
 
-    if (chatError || !chat) {
-      return NextResponse.json({ error: "Chat not found" }, { status: 404 })
+    if (chatResult.error || !chatResult.data) {
+      return errorResponse("Chat not found", 404)
     }
 
-    // Get messages
-    const { data: messages, error: messagesError } = await supabase
-      .from("chat_messages")
-      .select("*")
-      .eq("chat_id", chatId)
-      .order("created_at", { ascending: true })
-
-    if (messagesError) {
-      throw messagesError
+    if (messagesResult.error) {
+      throw messagesResult.error
     }
 
-    return NextResponse.json({ chat, messages })
+    return successResponse({ chat: chatResult.data, messages: messagesResult.data || [] })
   } catch (error) {
     console.error("Error fetching chat:", error)
-    return NextResponse.json(
-      { error: "Failed to fetch chat" },
-      { status: 500 }
-    )
+    return errorResponse("Failed to fetch chat", 500, error)
   }
 }
 
@@ -54,12 +64,18 @@ export async function PATCH(
   { params }: { params: Promise<{ chatId: string }> }
 ) {
   try {
-  const supabase = (await createServerSupabaseClient()) as any
-  const { data: { user } } = await supabase.auth.getUser()
+    const supabase = (await createServerSupabaseClient()) as any
     const { chatId } = await params
 
+    // Auth check with timeout
+    const authResult = await robustQuery(
+      () => supabase.auth.getUser(),
+      { operationName: "Auth check", timeout: 5000 }
+    ) as { data: { user: any } }
+
+    const user = authResult?.data?.user
     if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+      return errorResponse("Unauthorized", 401)
     }
 
     const body = await request.json()
@@ -73,33 +89,31 @@ export async function PATCH(
     }
 
     if (Object.keys(updates).length === 0) {
-      return NextResponse.json(
-        { error: "No valid fields to update" },
-        { status: 400 }
-      )
+      return errorResponse("No valid fields to update", 400)
     }
 
     updates.updated_at = new Date().toISOString()
 
-    const { data, error } = await supabase
-      .from("chats")
-      .update(updates)
-      .eq("id", chatId)
-      .eq("user_id", user.id)
-      .select()
-      .single()
+    // Single update query with robust handling
+    const { data, error } = await robustQuery(
+      () => supabase
+        .from("chats")
+        .update(updates)
+        .eq("id", chatId)
+        .eq("user_id", user.id)
+        .select()
+        .single(),
+      { operationName: "Update chat", timeout: 8000 }
+    ) as { data: any; error: any }
 
     if (error) {
       throw error
     }
 
-    return NextResponse.json({ chat: data })
+    return successResponse({ chat: data })
   } catch (error) {
     console.error("Error updating chat:", error)
-    return NextResponse.json(
-      { error: "Failed to update chat" },
-      { status: 500 }
-    )
+    return errorResponse("Failed to update chat", 500, error)
   }
 }
 
@@ -109,30 +123,37 @@ export async function DELETE(
   { params }: { params: Promise<{ chatId: string }> }
 ) {
   try {
-  const supabase = (await createServerSupabaseClient()) as any
-  const { data: { user } } = await supabase.auth.getUser()
+    const supabase = (await createServerSupabaseClient()) as any
     const { chatId } = await params
 
+    // Auth check with timeout
+    const authResult = await robustQuery(
+      () => supabase.auth.getUser(),
+      { operationName: "Auth check", timeout: 5000 }
+    ) as { data: { user: any } }
+
+    const user = authResult?.data?.user
     if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+      return errorResponse("Unauthorized", 401)
     }
 
-    const { error } = await supabase
-      .from("chats")
-      .delete()
-      .eq("id", chatId)
-      .eq("user_id", user.id)
+    // Single delete query with robust handling
+    const { error } = await robustQuery(
+      () => supabase
+        .from("chats")
+        .delete()
+        .eq("id", chatId)
+        .eq("user_id", user.id),
+      { operationName: "Delete chat", timeout: 8000 }
+    ) as { error: any }
 
     if (error) {
       throw error
     }
 
-    return NextResponse.json({ success: true })
+    return successResponse({ success: true })
   } catch (error) {
     console.error("Error deleting chat:", error)
-    return NextResponse.json(
-      { error: "Failed to delete chat" },
-      { status: 500 }
-    )
+    return errorResponse("Failed to delete chat", 500, error)
   }
 }

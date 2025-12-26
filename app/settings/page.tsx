@@ -115,6 +115,8 @@ export default function SettingsPage() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [deletePassword, setDeletePassword] = useState("")
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
+  const [loadError, setLoadError] = useState(false)
+  const [retryCount, setRetryCount] = useState(0)
 
   // Profile state
   const [displayName, setDisplayName] = useState("")
@@ -182,10 +184,111 @@ export default function SettingsPage() {
     }
   }, [authLoading, user, router])
 
+  // Force refresh data when page becomes visible (handles stuck connections)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && loadError) {
+        console.log("Page visible and previous load failed, retrying...")
+        setHasLoadedOnce(false)
+        setRetryCount(prev => prev + 1)
+      }
+    }
+
+    const handleOnline = () => {
+      if (loadError) {
+        console.log("Network restored, retrying load...")
+        setHasLoadedOnce(false)
+        setRetryCount(prev => prev + 1)
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    window.addEventListener("online", handleOnline)
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.removeEventListener("online", handleOnline)
+    }
+  }, [loadError])
+
+  // SessionStorage cache key and duration
+  const CACHE_KEY = `settings_data_${user?.id || 'anon'}`
+  const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
+
+  const loadFromCache = () => {
+    try {
+      const cached = sessionStorage.getItem(CACHE_KEY)
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached)
+        if (Date.now() - timestamp < CACHE_DURATION) {
+          return data
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load settings from cache:", e)
+    }
+    return null
+  }
+
+  const saveToCache = (data: any) => {
+    try {
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify({
+        data,
+        timestamp: Date.now()
+      }))
+    } catch (e) {
+      console.error("Failed to save settings to cache:", e)
+    }
+  }
+
   useEffect(() => {
     const loadSettings = async () => {
       if (!user) {
         setIsLoading(false)
+        return
+      }
+
+      // Try to load from sessionStorage cache first
+      const cachedData = loadFromCache()
+      if (cachedData && !loadError) {
+        setEmail(user.email || "")
+        setDisplayName(cachedData.displayName || "")
+        setPetName(cachedData.petName || "")
+        if (cachedData.avatarUrl) {
+          setAvatarUrl(cachedData.avatarUrl)
+        }
+        if (cachedData.personalization) {
+          setGender(cachedData.personalization.gender || "other")
+          setAge(cachedData.personalization.age || "teenage")
+          setTone(cachedData.personalization.tone || "friendly")
+        }
+        
+        // Still load from localStorage (not cached since it's local)
+        const keys: Record<string, string> = {}
+        AI_PROVIDERS.forEach(provider => {
+          const key = localStorage.getItem(`${provider.id}_api_key`) || ""
+          keys[provider.id] = key
+        })
+        setApiKeys(keys)
+        
+        const storedModels = localStorage.getItem("radhika-provider-models")
+        if (storedModels) {
+          try {
+            const parsed = JSON.parse(storedModels) as Record<string, string>
+            setProviderModels((prev) => ({ ...prev, ...parsed }))
+          } catch (err) {
+            console.error("Failed to parse stored models", err)
+          }
+        }
+        
+        const storedVoice = localStorage.getItem("voice_enabled")
+        const storedUIStyle = localStorage.getItem("ui_style")
+        if (storedVoice !== null) setVoiceEnabled(storedVoice === "true")
+        if (storedUIStyle) setUIStyle(storedUIStyle as "modern" | "pixel")
+        
+        setHasLoadedOnce(true)
+        setIsLoading(false)
+        console.log("Settings: Loaded from sessionStorage cache")
         return
       }
 
@@ -203,6 +306,10 @@ export default function SettingsPage() {
           .eq("id", user.id)
           .single()
 
+        let loadedDisplayName = ""
+        let loadedPetName = ""
+        let loadedAvatarUrl = ""
+
         if (userError) {
           console.error("Error loading user data:", userError)
           // Continue anyway - user might not have a profile yet
@@ -210,15 +317,19 @@ export default function SettingsPage() {
           // Prefer DB value but fall back to auth metadata if absent
           const dbDisplay = userData.display_name
           const metaDisplay = (user as any).user_metadata?.display_name || (user as any).user_metadata?.name
-          setDisplayName(dbDisplay ?? metaDisplay ?? "")
-          setPetName(userData.pet_name || "")
+          loadedDisplayName = dbDisplay ?? metaDisplay ?? ""
+          loadedPetName = userData.pet_name || ""
+          setDisplayName(loadedDisplayName)
+          setPetName(loadedPetName)
           if (userData.avatar_url) {
-            resolveAvatarUrl(userData.avatar_url)
-              .then(setAvatarUrl)
-              .catch((e) => {
-                console.warn("Failed to resolve avatar URL", e)
-                setAvatarUrl(userData.avatar_url)
-              })
+            try {
+              loadedAvatarUrl = await resolveAvatarUrl(userData.avatar_url)
+              setAvatarUrl(loadedAvatarUrl)
+            } catch (e) {
+              console.warn("Failed to resolve avatar URL", e)
+              loadedAvatarUrl = userData.avatar_url
+              setAvatarUrl(loadedAvatarUrl)
+            }
           }
         }
 
@@ -228,18 +339,34 @@ export default function SettingsPage() {
           .eq("user_id", user.id)
           .single()
 
+        let loadedPersonalization = { gender: "other", age: "teenage", tone: "friendly" }
+
         if (personalizationError) {
           // Log a warning instead of console.error to avoid Next dev overlay treating this as an unhandled client error.
           console.warn("Warning loading personalization:", personalizationError)
           // Continue anyway - settings might not exist yet
         } else if (personalizationData) {
           const loadedGender = personalizationData.personalization?.gender
-          setGender(["boy", "girl", "other"].includes(loadedGender) ? loadedGender : "other")
+          const validGender = ["boy", "girl", "other"].includes(loadedGender) ? loadedGender : "other"
           const loadedAge = personalizationData.personalization?.age
-          setAge(["kid", "teenage", "mature", "senior"].includes(loadedAge) ? loadedAge : "teenage")
+          const validAge = ["kid", "teenage", "mature", "senior"].includes(loadedAge) ? loadedAge : "teenage"
           const loadedTone = personalizationData.personalization?.tone
-          setTone(["professional", "casual", "friendly", "empathetic", "playful"].includes(loadedTone) ? loadedTone : "friendly")
+          const validTone = ["professional", "casual", "friendly", "empathetic", "playful"].includes(loadedTone) ? loadedTone : "friendly"
+          
+          loadedPersonalization = { gender: validGender, age: validAge, tone: validTone }
+          setGender(validGender)
+          setAge(validAge)
+          setTone(validTone)
         }
+
+        // Save to sessionStorage cache (only DB data)
+        saveToCache({
+          displayName: loadedDisplayName,
+          petName: loadedPetName,
+          avatarUrl: loadedAvatarUrl,
+          personalization: loadedPersonalization
+        })
+        console.log("Settings: Saved to sessionStorage cache")
 
         // Load API keys from localStorage
         const keys: Record<string, string> = {}
@@ -268,8 +395,10 @@ export default function SettingsPage() {
         if (storedUIStyle) setUIStyle(storedUIStyle as "modern" | "pixel")
 
         setHasLoadedOnce(true)
+        setLoadError(false)
       } catch (err) {
         console.error("Failed to load settings:", err)
+        setLoadError(true)
         // Still mark as loaded to prevent infinite loading
         setHasLoadedOnce(true)
       } finally {
@@ -278,7 +407,19 @@ export default function SettingsPage() {
     }
 
     loadSettings()
-  }, [user, supabase, hasLoadedOnce])
+  }, [user, supabase, hasLoadedOnce, retryCount])
+
+  // Manual retry function - clears cache to force fresh fetch
+  const handleRetry = () => {
+    try {
+      sessionStorage.removeItem(CACHE_KEY)
+    } catch (e) {
+      // Ignore
+    }
+    setHasLoadedOnce(false)
+    setLoadError(false)
+    setRetryCount(prev => prev + 1)
+  }
 
   const handleAvatarClick = () => {
     fileInputRef.current?.click()
@@ -378,6 +519,14 @@ export default function SettingsPage() {
         .eq("id", user.id)
 
       if (error) throw error
+      
+      // Invalidate cache after successful save
+      try {
+        sessionStorage.removeItem(CACHE_KEY)
+      } catch (e) {
+        // Ignore
+      }
+      
       toast.success("Profile saved successfully")
     } catch (err) {
       console.error("Failed to save profile:", err)
@@ -447,6 +596,13 @@ export default function SettingsPage() {
         )
 
       if (error) throw error
+
+      // Invalidate cache after successful save
+      try {
+        sessionStorage.removeItem(CACHE_KEY)
+      } catch (e) {
+        // Ignore
+      }
 
       // Keep local storage in sync for the chat page fallback
       try {
@@ -589,6 +745,28 @@ export default function SettingsPage() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
         <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
+      </div>
+    )
+  }
+
+  // Show error state with retry button
+  if (loadError && !hasLoadedOnce) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">
+            Connection Issue
+          </h2>
+          <p className="text-slate-500 dark:text-slate-400 mb-4">
+            Unable to load settings. This might be a temporary issue.
+          </p>
+          <Button onClick={handleRetry} className="gap-2">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Retry
+          </Button>
+        </div>
       </div>
     )
   }

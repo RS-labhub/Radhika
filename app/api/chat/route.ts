@@ -1,6 +1,6 @@
 import { checkRateLimit, getRateLimitHeaders } from "@/lib/rate-limit"
-import { createServerSupabaseClient } from "@/lib/supabase/server"
-import { SYSTEM_PROMPTS, CORE_SYSTEM_PROMPT } from "@/lib/chat/system-prompts"
+import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/server"
+import { SYSTEM_PROMPTS, CORE_SYSTEM_PROMPT, CREATOR_BOYFRIEND_PROMPT } from "@/lib/chat/system-prompts"
 import { createPersonalizedPrompt, type UserGender, type UserAge } from "@/lib/chat/personalization"
 import { handleGeminiRequest } from "./providers/gemini"
 import { handleOpenAIRequest } from "./providers/openai"
@@ -16,6 +16,7 @@ export async function POST(req: Request) {
 
     // Check authentication and rate limiting
     const supabase = await createServerSupabaseClient()
+    const serviceRole = createServiceRoleClient() // For checking reserved_emails
     const { data: { user } } = await supabase.auth.getUser()
     
     // Get identifier for rate limiting (user ID or IP)
@@ -26,17 +27,33 @@ export async function POST(req: Request) {
     let isCreator = false
     if (user?.id) {
       try {
-        const { data: profile, error: profileError } = await supabase
+        const userEmail = user.email?.toLowerCase()
+        
+        // Check reserved_emails table using service role (bypasses RLS)
+        const { data: reservedEmail } = await serviceRole
+          .from('reserved_emails')
+          .select('email')
+          .ilike('email', userEmail || '')
+          .single()
+        
+        // Also check profile
+        const { data: profile } = await supabase
           .from('profiles')
           .select('is_creator')
           .eq('id', user.id)
           .single()
 
-        if (!profileError && profile) {
-          isCreator = (profile as any).is_creator === true
-        }
+        // User is creator if in reserved_emails OR profile.is_creator is true
+        isCreator = !!reservedEmail || (profile as any)?.is_creator === true
+        
+        console.log('[chat] Creator check:', { 
+          email: userEmail, 
+          hasReservedEmail: !!reservedEmail, 
+          profileIsCreator: (profile as any)?.is_creator,
+          isCreator 
+        })
       } catch (e) {
-        console.error('Failed to read profile.is_creator', e)
+        console.error('[chat] Failed to check creator status:', e)
       }
     }
 
@@ -152,11 +169,11 @@ export async function POST(req: Request) {
     const finalTone = dbTone || conversationTone
 
     // Get system prompt
-    // If the user is the reserved creator, DO NOT apply user personalization
-    // — use a strict creator system prompt so the assistant follows the creator rules exactly.
+    // If the user is the reserved creator, use the special boyfriend prompt
     let systemPrompt: string
     if (isCreator) {
-      systemPrompt = `${CORE_SYSTEM_PROMPT}\n\n=== CREATOR MODE ===\nThis user is the reserved creator. When speaking to them, follow the creator-only rules verbatim and do NOT apply age/gender personalization or casual slang overrides. IMPORTANT: If asked who made you or who your creator is while speaking to this user, reply : \"it's you\" (do not print Rohan's portfolio links or other creator credits in this case). Include the usual short cinematic mini-story only when asked about the origin in other contexts — for the reserved creator, the brief reply above is mandatory.`
+      systemPrompt = CREATOR_BOYFRIEND_PROMPT
+      console.log('[chat] Using CREATOR_BOYFRIEND_PROMPT for owner')
     } else {
       const basePrompt = SYSTEM_PROMPTS[mode as keyof typeof SYSTEM_PROMPTS] || SYSTEM_PROMPTS.general
       const recentUserMessages = (messages || [])

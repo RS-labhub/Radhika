@@ -1,8 +1,10 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
+import { localChatStorage, LocalChat, LocalMessage as StorageMessage } from "@/lib/services/local-chat-storage"
+import { localFavoritesStorage } from "@/lib/services/local-favorites-storage"
 import { chatService } from "@/lib/supabase/chat-service"
-import type { Chat, ChatMessage, Mode } from "@/types/chat"
+import type { Mode } from "@/types/chat"
 import { useAuth } from "@/contexts/auth-context"
 
 export interface LocalMessage {
@@ -12,212 +14,236 @@ export interface LocalMessage {
   createdAt?: Date | string | number
   metadata?: Record<string, any>
   isFavorite?: boolean
+  isPending?: boolean
+  syncStatus?: "pending" | "synced" | "failed"
+}
+
+function toLocalMessage(msg: StorageMessage): LocalMessage {
+  return {
+    id: msg.id,
+    role: msg.role,
+    content: msg.content,
+    createdAt: msg.createdAt,
+    metadata: msg.metadata,
+    isFavorite: msg.isFavorite,
+    isPending: msg.syncStatus !== "synced",
+    syncStatus: msg.syncStatus,
+  }
 }
 
 export function useChatPersistence(mode: Mode, profileId?: string) {
   const { user, isAuthenticated } = useAuth()
-  const [currentChat, setCurrentChat] = useState<Chat | null>(null)
+  const [currentChat, setCurrentChat] = useState<LocalChat | null>(null)
   const [isLoadingChat, setIsLoadingChat] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
-  const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false)
+  const [syncStats, setSyncStats] = useState({ pending: 0, failed: 0 })
+  const hasInitialized = useRef(false)
+  const lastModeRef = useRef<string | null>(null)
+  const lastProfileRef = useRef<string | undefined>(undefined)
 
-  // Create or load chat when mode or profile changes
+  // Set user ID for both local storages
+  useEffect(() => {
+    if (user?.id) {
+      localChatStorage.setUserId(user.id)
+      localFavoritesStorage.setUserId(user.id)
+    }
+  }, [user?.id])
+
+  useEffect(() => {
+    const unsubscribe = localChatStorage.subscribe((event, data) => {
+      const stats = localChatStorage.getStats()
+      setSyncStats({
+        pending: stats.pendingChats + stats.pendingMessages,
+        failed: stats.failedChats + stats.failedMessages,
+      })
+      if (event === "chat-synced" && currentChat && data?.localId === currentChat.localId) {
+        setCurrentChat({ ...data })
+      }
+    })
+    return unsubscribe
+  }, [currentChat?.localId])
+
   useEffect(() => {
     if (!isAuthenticated || !user) {
       setCurrentChat(null)
-      setHasAttemptedLoad(false)
-      setIsLoadingChat(false)
+      hasInitialized.current = false
       return
     }
+    if (hasInitialized.current && lastModeRef.current === mode && lastProfileRef.current === profileId) {
+      return
+    }
+    hasInitialized.current = true
+    lastModeRef.current = mode
+    lastProfileRef.current = profileId
 
-    // Reset flag when mode or profile changes
-    setHasAttemptedLoad(false)
-    setCurrentChat(null) // Clear current chat when switching modes or profiles
-    // Don't auto-create a chat - let user send first message to create it
-  }, [isAuthenticated, user, mode, profileId])
-  
-  useEffect(() => {
-    // Don't block app startup - just mark as ready
-    if (!isAuthenticated || !user || hasAttemptedLoad) return
-
-    setHasAttemptedLoad(true)
-    setIsLoadingChat(false) // Not loading, just ready
+    // DON'T auto-load an existing chat - this causes messages to go to the wrong chat
+    // Users should explicitly select a chat from history or start a new one
+    // Just ensure localStorage has the data ready
+    const localChats = localChatStorage.getChats(mode, profileId)
+    console.log(`📚 [useChatPersistence] Found ${localChats.length} local chats for mode=${mode}`)
     
-    // Try to load existing chat in background (optional, silent failure)
-    // Only auto-load if there are existing chats, don't create new ones
-    setTimeout(() => {
-      loadExistingChat()
-        .then(() => {
-          console.log("Background chat load completed")
-        })
-        .catch(err => {
-          console.log("Could not load existing chat:", err.message)
-          // No chat exists - this is OK, user will create one on first message
-        })
-        .finally(() => {
-          setIsLoadingChat(false)
-        })
-    }, 1000) // Delay by 1 second to not interfere with page load
-  }, [isAuthenticated, user, hasAttemptedLoad])
+    // Only set currentChat if we're continuing an ACTIVE session (not navigating back)
+    // The chat should be null initially - user will either:
+    // 1. Start typing (auto-creates a new chat)
+    // 2. Select an existing chat from history
+    setCurrentChat(null)
+    
+    // Fetch remote chats in background
+    fetchAndMergeRemoteChats()
+  }, [isAuthenticated, user?.id, mode, profileId])
 
-  const loadExistingChat = async () => {
-    if (!user) {
-      console.log("No user found, skipping chat load")
-      return
-    }
-
+  const fetchAndMergeRemoteChats = async () => {
+    if (!isAuthenticated || !user) return
     try {
-      setIsLoadingChat(true)
-      
-      console.log("Loading chats for mode:", mode, "profile:", profileId)
-      
-      // Try to get existing chats for this mode/profile - NO TIMEOUT
-      const chats = await chatService.getChats(mode, profileId)
-      
-      console.log("Found chats:", chats.length)
-      
-      if (chats.length > 0) {
-        // Use the most recent chat
-        setCurrentChat(chats[0])
-        console.log("Loaded existing chat:", chats[0].id)
-      } else {
-        setCurrentChat(null)
+      const remoteChats = await chatService.getChats(mode, profileId)
+      if (remoteChats.length > 0) {
+        localChatStorage.mergeRemoteChats(remoteChats)
+        if (!currentChat) {
+          const allChats = localChatStorage.getChats(mode, profileId)
+          if (allChats.length > 0) {
+            setCurrentChat(allChats[0])
+          }
+        }
       }
     } catch (err) {
-      console.error("Failed to load chat:", err)
-      // Don't throw - just set to null so user can still use the app
-      setCurrentChat(null)
-    } finally {
-      setIsLoadingChat(false)
+      console.log("Could not fetch remote chats:", (err as Error).message)
     }
   }
 
-  // Load messages for current chat
   const loadMessages = useCallback(async (chatId?: string): Promise<LocalMessage[]> => {
-    const targetChatId = chatId || currentChat?.id
-    if (!targetChatId || !isAuthenticated) {
-      return []
+    const targetChatId = chatId || currentChat?.localId || currentChat?.id
+    if (!targetChatId) return []
+    const localMessages = localChatStorage.getMessagesForChat(targetChatId)
+    const messages = localMessages.map(toLocalMessage)
+    const remoteChatId = currentChat?.remoteId || chatId
+    if (remoteChatId && !remoteChatId.startsWith("local_")) {
+      try {
+        const remoteMessages = await chatService.getMessages(remoteChatId)
+        if (remoteMessages.length > 0) {
+          localChatStorage.mergeRemoteMessages(remoteChatId, remoteMessages)
+          return localChatStorage.getMessagesForChat(targetChatId).map(toLocalMessage)
+        }
+      } catch (err) {
+        console.log("Could not fetch remote messages:", (err as Error).message)
+      }
     }
+    return messages
+  }, [currentChat?.localId, currentChat?.remoteId, currentChat?.id])
 
-    try {
-      const messages = await chatService.getMessages(targetChatId)
-      return messages.map(msg => ({
-        id: msg.id,
-        role: msg.role,
-        content: msg.content,
-        createdAt: msg.created_at,
-        metadata: msg.metadata,
-        isFavorite: Boolean((msg as any).is_favorite),
-      }))
-    } catch (err) {
-      console.error("Failed to load messages:", err)
-      return []
+  const addMessage = useCallback((message: LocalMessage): StorageMessage | undefined => {
+    const chatId = currentChat?.localId || currentChat?.id
+    if (!chatId) return undefined
+    return localChatStorage.addMessage(chatId, message.role, message.content, message.metadata, message.id)
+  }, [currentChat?.localId, currentChat?.id])
+
+  const createNewChat = useCallback((title?: string): LocalChat | undefined => {
+    if (!user) return undefined
+    const chat = localChatStorage.createChat(
+      mode,
+      title || mode.charAt(0).toUpperCase() + mode.slice(1) + " Chat",
+      profileId,
+      user.id
+    )
+    setCurrentChat(chat)
+    return chat
+  }, [mode, profileId, user?.id])
+
+  const getOrCreateChat = useCallback((title?: string): LocalChat | undefined => {
+    if (currentChat) return currentChat
+    return createNewChat(title)
+  }, [currentChat, createNewChat])
+
+  const clearCurrentChat = useCallback(() => setCurrentChat(null), [])
+
+  const loadChat = useCallback((chatId: string): LocalChat | undefined => {
+    const chat = localChatStorage.getChat(chatId)
+    if (chat) { setCurrentChat(chat); return chat }
+    if (!chatId.startsWith("local_")) {
+      chatService.getChatById(chatId).then(remoteChat => {
+        localChatStorage.mergeRemoteChats([remoteChat])
+        const lc = localChatStorage.getChat(chatId)
+        if (lc) setCurrentChat(lc)
+      }).catch(() => {})
     }
-  }, [currentChat?.id, isAuthenticated])
-
-  // Save messages to database
-  const saveMessages = useCallback(async (messages: LocalMessage[]) => {
-    if (!currentChat || !isAuthenticated) {
-      return
-    }
-
-    try {
-      setIsSaving(true)
-      await chatService.saveChatHistory(
-        currentChat.id,
-        messages.map(msg => ({
-          id: msg.id,
-          role: msg.role,
-          content: msg.content,
-          metadata: msg.metadata,
-        }))
-      )
-    } catch (err) {
-      console.error("Failed to save messages:", err)
-    } finally {
-      setIsSaving(false)
-    }
-  }, [currentChat, isAuthenticated])
-
-  // Add a single message
-  const addMessage = useCallback(async (message: LocalMessage) => {
-    if (!currentChat || !isAuthenticated) {
-      return undefined
-    }
-
-    try {
-      return await chatService.addMessage(
-        currentChat.id,
-        message.role,
-        message.content,
-        message.metadata,
-        message.id
-      )
-    } catch (err) {
-      console.error("Failed to add message:", err)
-      return undefined
-    }
-  }, [currentChat?.id, isAuthenticated])
-
-  // Create a new chat (for starting fresh conversation)
-  const createNewChat = useCallback(async (title?: string) => {
-    if (!isAuthenticated) return
-
-    try {
-      const newChat = await chatService.createChat(
-        mode,
-        title || `${mode.charAt(0).toUpperCase() + mode.slice(1)} Chat`,
-        profileId
-      )
-      setCurrentChat(newChat)
-      return newChat
-    } catch (err) {
-      console.error("Failed to create new chat:", err)
-    }
-  }, [isAuthenticated, mode, profileId])
-
-  const clearCurrentChat = useCallback(() => {
-    setCurrentChat(null)
+    return undefined
   }, [])
 
-  // Load a specific chat by ID
-  const loadChat = useCallback(async (chatId: string) => {
-    if (!isAuthenticated) return
-
-    try {
-      const chat = await chatService.getChatById(chatId)
-      setCurrentChat(chat)
-      return chat
-    } catch (err) {
-      console.error("Failed to load chat:", err)
-    }
-  }, [isAuthenticated])
-
-  // Get all chats for current mode
   const getAllChats = useCallback(async () => {
-    if (!isAuthenticated) return []
-
-    try {
-      // Fetch chats for the current mode and profile
-      // This ensures we only show chats relevant to the current context
-      return await chatService.getChats(mode, profileId)
-    } catch (err) {
-      console.error("Failed to get chats:", err)
-      return []
+    // First get local chats immediately - this ALWAYS works
+    let chats = localChatStorage.getChats(mode, profileId)
+    console.log(`📚 getAllChats: Found ${chats.length} local chats for mode=${mode}`)
+    
+    // Then try to fetch and merge remote chats (with timeout)
+    if (isAuthenticated && user) {
+      try {
+        // Create an AbortController for this specific request
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => {
+          console.log("⏰ Remote fetch timeout - aborting")
+          controller.abort()
+        }, 8000) // 8 second timeout
+        
+        try {
+          const remoteChats = await chatService.getChats(mode, profileId)
+          clearTimeout(timeoutId)
+          
+          if (remoteChats && remoteChats.length > 0) {
+            console.log(`☁️ Got ${remoteChats.length} remote chats, merging...`)
+            localChatStorage.mergeRemoteChats(remoteChats)
+            // Return the merged result
+            chats = localChatStorage.getChats(mode, profileId)
+            console.log(`✅ After merge: ${chats.length} total chats`)
+          } else {
+            console.log("☁️ No remote chats found")
+          }
+        } catch (fetchErr: any) {
+          clearTimeout(timeoutId)
+          // Don't log abort errors as they're expected on timeout
+          if (fetchErr?.name !== 'AbortError' && !fetchErr?.message?.includes('abort')) {
+            console.log("Could not fetch remote chats:", fetchErr?.message || fetchErr)
+          }
+        }
+      } catch (outerErr) {
+        console.log("Error in remote fetch setup:", outerErr)
+      }
     }
-  }, [isAuthenticated, mode, profileId])
+    
+    // ALWAYS return local chats, even if remote fetch failed
+    return chats
+  }, [mode, profileId, isAuthenticated, user])
+  const getAllChatsGlobal = useCallback(() => localChatStorage.getAllChats(), [])
+  const syncNow = useCallback(async () => { setIsSaving(true); try { await localChatStorage.syncNow() } finally { setIsSaving(false) } }, [])
+  const retryFailed = useCallback(() => localChatStorage.retryFailed(), [])
+  const getStats = useCallback(() => localChatStorage.getStats(), [])
+  const updateChatTitle = useCallback((chatId: string, title: string) => {
+    localChatStorage.updateChat(chatId, { title })
+    if (currentChat && (currentChat.localId === chatId || currentChat.id === chatId)) {
+      setCurrentChat(prev => prev ? { ...prev, title } : null)
+    }
+  }, [currentChat])
+  const deleteChat = useCallback((chatId: string) => {
+    localChatStorage.deleteChat(chatId)
+    if (currentChat && (currentChat.localId === chatId || currentChat.id === chatId)) setCurrentChat(null)
+  }, [currentChat])
+  const deleteAllChats = useCallback(() => {
+    localChatStorage.deleteAllChats()
+    setCurrentChat(null)
+  }, [])
+  const saveMessages = useCallback(async () => {}, [])
+  const getPendingMessages = useCallback(() => {
+    const chatId = currentChat?.localId || currentChat?.id
+    if (!chatId) return []
+    return localChatStorage.getMessagesForChat(chatId).filter(m => m.syncStatus === "pending")
+  }, [currentChat?.localId, currentChat?.id])
+  const getQueueStatus = useCallback(() => {
+    const stats = localChatStorage.getStats()
+    return { messageCount: stats.pendingMessages, chatCount: stats.pendingChats, isSyncing: stats.isSyncing }
+  }, [])
+  const subscribeToQueue = useCallback((cb: (e: string, d?: any) => void) => localChatStorage.subscribe(cb as any), [])
 
   return {
-    currentChat,
-    isLoadingChat,
-    isSaving,
-    loadMessages,
-    saveMessages,
-    addMessage,
-    createNewChat,
-    loadChat,
-    getAllChats,
-    clearCurrentChat,
-    isEnabled: isAuthenticated,
+    currentChat, isLoadingChat, isSaving, loadMessages, saveMessages, addMessage, createNewChat, getOrCreateChat,
+    loadChat, getAllChats, getAllChatsGlobal, clearCurrentChat, updateChatTitle, deleteChat, deleteAllChats, isEnabled: isAuthenticated,
+    syncNow, retryFailed, getStats, syncStats, getPendingMessages, getQueueStatus, syncQueue: syncNow, subscribeToQueue,
   }
 }

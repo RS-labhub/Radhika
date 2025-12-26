@@ -6,9 +6,9 @@ interface RateLimitConfig {
 }
 
 const GUEST_RATE_LIMITS: Record<string, RateLimitConfig> = {
-  chat: { maxRequests: 10, windowMs: 60 * 60 * 1000 }, // 10 per hour
-  image: { maxRequests: 5, windowMs: 60 * 60 * 1000 }, // 5 per hour
-  speech: { maxRequests: 10, windowMs: 60 * 60 * 1000 }, // 10 per hour
+  chat: { maxRequests: 50, windowMs: 60 * 60 * 1000 }, // 50 per hour
+  image: { maxRequests: 25, windowMs: 60 * 60 * 1000 }, // 25 per hour
+  speech: { maxRequests: 0, windowMs: 60 * 60 * 1000 }, // Not allowed for guests
   default: { maxRequests: 20, windowMs: 60 * 60 * 1000 }, // 20 per hour
 }
 

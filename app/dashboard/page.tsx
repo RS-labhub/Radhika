@@ -64,6 +64,30 @@ export default function DashboardPage() {
   const [isLoading, setIsLoading] = useState(false) // Start with false, not true
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false)
   const [loadError, setLoadError] = useState(false)
+  const [retryCount, setRetryCount] = useState(0)
+
+  // Load cached data from sessionStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined' || !user?.id) return
+    
+    try {
+      const cacheKey = `dashboard-cache-${user.id}`
+      const cached = sessionStorage.getItem(cacheKey)
+      if (cached) {
+        const { chats, profiles: cachedProfiles, stats: cachedStats, timestamp } = JSON.parse(cached)
+        // Cache valid for 5 minutes
+        if (Date.now() - timestamp < 5 * 60 * 1000) {
+          setRecentChats(chats || [])
+          setProfiles(cachedProfiles || [])
+          setStats(cachedStats || null)
+          setHasLoadedOnce(true)
+          console.log('📦 Loaded dashboard from cache')
+        }
+      }
+    } catch (e) {
+      // Ignore cache errors
+    }
+  }, [user?.id])
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -71,10 +95,82 @@ export default function DashboardPage() {
     }
   }, [authLoading, isAuthenticated, router])
 
+  // Force refresh data when page becomes visible (handles stuck connections)
   useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && loadError) {
+        console.log("Page visible and previous load failed, retrying...")
+        setHasLoadedOnce(false)
+        setRetryCount(prev => prev + 1)
+      }
+    }
+
+    const handleOnline = () => {
+      if (loadError) {
+        console.log("Network restored, retrying load...")
+        setHasLoadedOnce(false)
+        setRetryCount(prev => prev + 1)
+      }
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    window.addEventListener("online", handleOnline)
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.removeEventListener("online", handleOnline)
+    }
+  }, [loadError])
+
+  // SessionStorage cache key and duration
+  const CACHE_KEY = `dashboard_data_${user?.id || 'anon'}`
+  const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes - data will be fresh for this duration
+
+  const loadFromCache = () => {
+    try {
+      const cached = sessionStorage.getItem(CACHE_KEY)
+      if (cached) {
+        const { data, timestamp } = JSON.parse(cached)
+        // Check if cache is still valid
+        if (Date.now() - timestamp < CACHE_DURATION) {
+          return data
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load from cache:", e)
+    }
+    return null
+  }
+
+  const saveToCache = (data: { chats: Chat[], profiles: ChatProfile[], stats: any }) => {
+    try {
+      sessionStorage.setItem(CACHE_KEY, JSON.stringify({
+        data,
+        timestamp: Date.now()
+      }))
+    } catch (e) {
+      console.error("Failed to save to cache:", e)
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController()
+    
     const fetchData = async () => {
       if (!user?.id) {
         setIsLoading(false)
+        return
+      }
+
+      // Try to load from sessionStorage cache first
+      const cachedData = loadFromCache()
+      if (cachedData && !loadError) {
+        setRecentChats(cachedData.chats)
+        setProfiles(cachedData.profiles)
+        setStats(cachedData.stats)
+        setHasLoadedOnce(true)
+        setIsLoading(false)
+        console.log("Dashboard: Loaded from sessionStorage cache")
         return
       }
 
@@ -89,7 +185,7 @@ export default function DashboardPage() {
           console.warn("Dashboard load taking too long, clearing loading state")
           setIsLoading(false)
           setLoadError(true)
-        }, 30000) // 30 seconds max
+        }, 15000) // Reduced to 15 seconds
         
         const [chatsData, profilesData, statsData] = await Promise.all([
           getRecentChats(user.id, 5),
@@ -98,21 +194,52 @@ export default function DashboardPage() {
         ])
 
         clearTimeout(safetyTimeout)
-        setRecentChats(chatsData)
-        setProfiles(profilesData)
-        setStats(statsData)
-        setHasLoadedOnce(true)
+        
+        if (!controller.signal.aborted) {
+          setRecentChats(chatsData)
+          setProfiles(profilesData)
+          setStats(statsData)
+          setHasLoadedOnce(true)
+          setLoadError(false)
+          
+          // Save to sessionStorage cache
+          saveToCache({
+            chats: chatsData,
+            profiles: profilesData,
+            stats: statsData
+          })
+          console.log("Dashboard: Saved to sessionStorage cache")
+        }
       } catch (error) {
         console.error("Failed to fetch dashboard data:", error)
-        setLoadError(true)
+        if (!controller.signal.aborted) {
+          setLoadError(true)
+        }
         // Don't mark as loaded on error - allow retry
       } finally {
-        setIsLoading(false)
+        if (!controller.signal.aborted) {
+          setIsLoading(false)
+        }
       }
     }
 
     fetchData()
-  }, [user?.id, hasLoadedOnce])
+
+    return () => {
+      controller.abort()
+    }
+  }, [user?.id, hasLoadedOnce, retryCount])
+
+  // Manual retry function - clears cache to force fresh fetch
+  const handleRetry = () => {
+    try {
+      sessionStorage.removeItem(CACHE_KEY)
+    } catch (e) {
+      // Ignore
+    }
+    setHasLoadedOnce(false)
+    setRetryCount(prev => prev + 1)
+  }
 
   const handleSignOut = async () => {
     await signOut()
@@ -135,6 +262,28 @@ export default function DashboardPage() {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-600" />
+      </div>
+    )
+  }
+
+  // Show error state with retry button
+  if (loadError && !hasLoadedOnce) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4">
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">
+            Connection Issue
+          </h2>
+          <p className="text-slate-500 dark:text-slate-400 mb-4">
+            Unable to load dashboard data. This might be a temporary issue.
+          </p>
+          <Button onClick={handleRetry} className="gap-2">
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Retry
+          </Button>
+        </div>
       </div>
     )
   }

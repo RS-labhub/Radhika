@@ -18,12 +18,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { chatService } from "@/lib/supabase/chat-service"
+import { localChatStorage } from "@/lib/services/local-chat-storage"
 
 interface ChatHistorySidebarProps {
   chats: Chat[]
   currentChatId?: string
   onSelectChat: (chatId: string) => void
   onDeleteChat?: (chatId: string) => void
+  onDeleteAllChats?: () => void
   onRenameChat?: (chatId: string, title: string) => void
   onRefresh?: () => void
   isLoading?: boolean
@@ -34,6 +36,7 @@ export function ChatHistorySidebar({
   currentChatId,
   onSelectChat,
   onDeleteChat,
+  onDeleteAllChats,
   onRefresh,
   onRenameChat,
   isLoading = false
@@ -44,6 +47,15 @@ export function ChatHistorySidebar({
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false)
   const [sharingChatId, setSharingChatId] = useState<string | null>(null)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
+
+  // Deduplicate chats by ID - safety measure to prevent duplicate key errors
+  const uniqueChats = chats.reduce((acc, chat) => {
+    // Check if we already have a chat with this ID
+    if (!acc.find(c => c.id === chat.id)) {
+      acc.push(chat)
+    }
+    return acc
+  }, [] as Chat[])
 
   const handleShareClick = async (chatId: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -86,7 +98,14 @@ export function ChatHistorySidebar({
 
     try {
       setIsDeleting(true)
-      await chatService.deleteChat(chatToDelete)
+      // Delete from localStorage first (always works)
+      localChatStorage.deleteChat(chatToDelete)
+      // Then try to delete from Supabase (may fail, but local is already gone)
+      try {
+        await chatService.deleteChat(chatToDelete)
+      } catch (err) {
+        console.log("Could not delete from Supabase:", err)
+      }
       onDeleteChat?.(chatToDelete)
       onRefresh?.()
     } catch (err) {
@@ -101,7 +120,15 @@ export function ChatHistorySidebar({
   const handleDeleteAll = async () => {
     try {
       setIsDeleting(true)
-      await chatService.deleteAllChats()
+      // Delete from localStorage first (always works)
+      localChatStorage.deleteAllChats()
+      // Then try to delete from Supabase (may fail, but local is already gone)
+      try {
+        await chatService.deleteAllChats()
+      } catch (err) {
+        console.log("Could not delete all from Supabase:", err)
+      }
+      onDeleteAllChats?.()
       onRefresh?.()
     } catch (err) {
       console.error("Failed to delete all chats:", err)
@@ -170,7 +197,7 @@ export function ChatHistorySidebar({
                   variant="ghost"
                   size="sm"
                   onClick={() => setDeleteAllDialogOpen(true)}
-                  disabled={isLoading || chats.length === 0}
+                  disabled={isLoading || uniqueChats.length === 0}
                   className="h-7 px-2 text-xs text-red-600 hover:text-red-700 dark:text-red-300"
                 >
                   Delete All
@@ -178,7 +205,7 @@ export function ChatHistorySidebar({
               </div>
           </div>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {chats.length} {chats.length === 1 ? "conversation" : "conversations"}
+            {uniqueChats.length} {uniqueChats.length === 1 ? "conversation" : "conversations"}
           </p>
         </div>
 
@@ -188,7 +215,7 @@ export function ChatHistorySidebar({
               <div className="flex items-center justify-center p-8">
                 <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
               </div>
-            ) : chats.length === 0 ? (
+            ) : uniqueChats.length === 0 ? (
               <div className="flex flex-col items-center justify-center p-8 text-center">
                 <MessageSquare className="mb-2 h-8 w-8 text-slate-300 dark:text-slate-600" />
                 <p className="text-sm text-slate-500 dark:text-slate-400">
@@ -199,7 +226,7 @@ export function ChatHistorySidebar({
                 </p>
               </div>
             ) : (
-              chats.map((chat) => {
+              uniqueChats.map((chat) => {
                 const isActive = chat.id === currentChatId
                 return (
                   <div

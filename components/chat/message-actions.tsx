@@ -4,7 +4,6 @@ import { useState } from "react"
 import { Copy, Download, Star, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
-import { chatService } from "@/lib/supabase/chat-service"
 import { toast } from "sonner"
 import { exportMessageAsPdf } from "@/lib/services/exports"
 
@@ -43,23 +42,19 @@ export function MessageActions({ messageId, content, isFavorite = false, onFavor
     }
   }
 
-  const handleToggleFavorite = async () => {
-    try {
-      setIsTogglingFavorite(true)
-      if (isFavorite) {
-        await chatService.removeFromFavorites(messageId)
-        toast.success("Removed from favorites")
-        onFavoriteChange?.(false)
-      } else {
-        await chatService.addToFavorites(messageId)
-        toast.success("Added to favorites")
-        onFavoriteChange?.(true)
-      }
-    } catch (err) {
-      toast.error("Failed to update favorite")
-    } finally {
-      setIsTogglingFavorite(false)
-    }
+  const handleToggleFavorite = () => {
+    // LOCAL-FIRST: Just update UI and let parent handle storage/sync
+    // The onFavoriteChange callback in page.tsx handles:
+    // 1. Updating local UI state (messages array)
+    // 2. Adding/removing from localFavoritesStorage
+    // 3. Background sync to Supabase
+    if (!onFavoriteChange) return
+    
+    setIsTogglingFavorite(true)
+    const newValue = !isFavorite
+    onFavoriteChange(newValue)
+    toast.success(newValue ? "Added to favorites" : "Removed from favorites")
+    setIsTogglingFavorite(false)
   }
 
   return (

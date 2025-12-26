@@ -37,6 +37,8 @@ import { useFeatureAccess } from "@/hooks/use-feature-access"
 import { useAuth } from "@/contexts/auth-context"
 import { useTheme } from "next-themes"
 import { chatService } from "@/lib/supabase/chat-service"
+import { localChatStorage } from "@/lib/services/local-chat-storage"
+import { localFavoritesStorage } from "@/lib/services/local-favorites-storage"
 
 import type { KeyProvider, KeyProviderMetadata, Mode, ModeDefinition, Provider, ProviderDefinition, UIStyle, UserGender, UserAge, UserPersonalization, Chat } from "@/types/chat"
 import { cn } from "@/lib/utils"
@@ -362,10 +364,65 @@ export default function FuturisticRadhika() {
     loadChat,
     getAllChats,
     clearCurrentChat,
+    deleteAllChats: deleteAllLocalChats,
     isEnabled: persistenceEnabled,
+    // Queue-related exports
+    getQueueStatus,
+    syncQueue,
+    subscribeToQueue,
   } = useChatPersistence(mode, currentProfileId || undefined)
 
   const { toast } = useToast()
+
+  // Track pending queue items
+  const [pendingQueueCount, setPendingQueueCount] = useState(0)
+
+  // Subscribe to queue events for UI feedback
+  useEffect(() => {
+    const unsubscribe = subscribeToQueue((event, data) => {
+      console.log("📬 Queue event:", event, data)
+      
+      // Update pending count
+      const status = getQueueStatus()
+      setPendingQueueCount(status.messageCount + status.chatCount)
+      
+      // Show toast notifications for important events
+      if (event === "message-saved" || event === "chat-created") {
+        toast({
+          title: "Synced successfully",
+          description: "Pending messages have been saved to the cloud.",
+          duration: 3000,
+        })
+      } else if (event === "message-failed" || event === "chat-failed") {
+        toast({
+          title: "Sync failed",
+          description: "Some messages could not be saved. Will retry later.",
+          variant: "destructive",
+          duration: 5000,
+        })
+      }
+    })
+    
+    // Check initial queue status
+    const status = getQueueStatus()
+    setPendingQueueCount(status.messageCount + status.chatCount)
+    
+    return unsubscribe
+  }, [subscribeToQueue, getQueueStatus, toast])
+
+  // Subscribe to local chat storage events to update allChats in real-time
+  useEffect(() => {
+    const unsubscribe = localChatStorage.subscribe((event, data) => {
+      // When a chat is created or updated, refresh the chat list
+      if (event === 'chat-created' || event === 'chat-synced' || event === 'data-loaded') {
+        if (persistenceEnabled) {
+          const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+          setAllChats(localChats as Chat[])
+        }
+      }
+    })
+    return unsubscribe
+  }, [persistenceEnabled, mode, currentProfileId])
 
   // State for all chats in current mode
   const [allChats, setAllChats] = useState<Chat[]>([])
@@ -510,10 +567,10 @@ export default function FuturisticRadhika() {
           }
         }
         
-        // Persist the completed assistant message to database
+        // Persist the completed assistant message to localStorage first, then sync to Supabase
         if (persistenceEnabled && chatToUse && message?.id && message?.content) {
           console.log("Conditions met, attempting to persist assistant message")
-          console.log("Chat ID:", chatToUse.id)
+          console.log("Chat ID:", chatToUse.id, "LocalId:", chatToUse.localId)
           console.log("Message ID:", message.id)
           console.log("Content length:", message.content.length)
           
@@ -521,18 +578,19 @@ export default function FuturisticRadhika() {
           console.log("Normalized content length:", normalizedContent.length)
           
           if (normalizedContent.trim() && !persistedMessageIdsRef.current.has(message.id)) {
-            console.log("Persisting assistant message NOW...")
+            console.log("Persisting assistant message to localStorage NOW...")
             try {
-              // Use chatService directly to ensure we use the correct chat ID
-              const savedMessage = await chatService.addMessage(
-                chatToUse.id,
-                message.role || "assistant",
+              // Use localStorage first - always works instantly
+              const chatId = chatToUse.localId || chatToUse.id
+              const savedMessage = localChatStorage.addMessage(
+                chatId,
+                (message.role || "assistant") as "user" | "assistant" | "system",
                 normalizedContent,
                 message.metadata,
                 message.id
               )
               persistedMessageIdsRef.current.add(message.id)
-              console.log("✅ Successfully persisted assistant message:", savedMessage)
+              console.log("✅ Successfully persisted assistant message to localStorage:", savedMessage.localId)
             } catch (err) {
               console.error("❌ Failed to persist assistant message:", err)
               console.error("Error details:", JSON.stringify(err, null, 2))
@@ -643,14 +701,20 @@ export default function FuturisticRadhika() {
         const newChat = await createNewChat()
         if (newChat) {
           console.log("✅ New chat created:", newChat.id)
-          // Mark this chat as "loaded" so the persisted loader won't immediately
-          // replace local optimistic UI while we still need to add the first message.
+          // Mark this chat as "loaded" so the persisted loader won't immediately replace local optimistic UI while we still need to add the first message.
           try {
             hasLoadedRef.current = newChat.id
             persistedMessageIdsRef.current = new Set()
           } catch (e) {
             // ignore
           }
+          // IMMEDIATELY add new chat to allChats for sidebar visibility
+          setAllChats(prev => {
+            // Avoid duplicates
+            const exists = prev.some(c => c.id === newChat.id || (c as any).localId === (newChat as any).localId)
+            if (exists) return prev
+            return [newChat as Chat, ...prev]
+          })
           // Small delay to ensure state updates
           await new Promise(resolve => setTimeout(resolve, 100))
         }
@@ -761,95 +825,150 @@ export default function FuturisticRadhika() {
   const previousMessagesLengthRef = useRef(0)
   
   useEffect(() => {
-    if (!persistenceEnabled || !currentChat || messages.length === 0) return
+    // Use ref to get latest currentChat value
+    const chat = currentChatRef.current || currentChat
+    
+    if (!persistenceEnabled || !chat || messages.length === 0) return
     if (isRestoringRef.current) {
       // Skip persisting when we're just restoring from DB to avoid duplicates
       previousMessagesLengthRef.current = messages.length
       isRestoringRef.current = false
       return
     }
+    // Skip if we're in the middle of creating a chat (auto-create handles persistence)
+    if (isCreatingChatRef.current) return
     
     // Only persist if we have new messages
     if (messages.length > previousMessagesLengthRef.current) {
       const newMessages = messages.slice(previousMessagesLengthRef.current)
       console.log("New messages detected:", newMessages.length, newMessages.map((m: any) => ({ id: m.id, role: m.role })))
       
-      // Process messages sequentially
-      ;(async () => {
-        for (const msg of newMessages) {
-          if (!msg?.id) continue
-          const normalizedContent = normalizeContentForStorage(msg.content)
-          const trimmed = normalizedContent.trim()
-          
-          // Skip if we've already persisted this ID
-          if (persistedMessageIdsRef.current.has(msg.id)) continue
-          
-          // Only persist user messages here
-          // Assistant messages will be persisted when streaming completes
-          if (msg.role === "user" && trimmed) {
-            console.log("Persisting user message:", msg.id, "to chat:", currentChat?.id)
-            try {
-              await chatService.addMessage(
-                currentChat.id,
-                msg.role,
-                normalizedContent,
-                msg.metadata,
-                msg.id
-              )
-              persistedMessageIdsRef.current.add(msg.id)
-              console.log("✅ User message persisted successfully")
-            } catch (err) {
-              console.error("❌ Failed to persist user message:", err)
-            }
-          } else {
-            console.log("Skipping non-user message in effect:", msg.role, msg.id)
+      // Process messages - save to localStorage immediately
+      for (const msg of newMessages) {
+        if (!msg?.id) continue
+        const normalizedContent = normalizeContentForStorage(msg.content)
+        const trimmed = normalizedContent.trim()
+        
+        // Skip if we've already persisted this ID
+        if (persistedMessageIdsRef.current.has(msg.id)) continue
+        
+        // Only persist user messages here
+        // Assistant messages will be persisted when streaming completes
+        if (msg.role === "user" && trimmed) {
+          const chatId = chat.localId || chat.id
+          console.log("Persisting user message to localStorage:", msg.id, "to chat:", chatId)
+          try {
+            // Save to localStorage first - always works instantly, syncs to Supabase in background
+            localChatStorage.addMessage(
+              chatId,
+              msg.role as "user" | "assistant" | "system",
+              normalizedContent,
+              msg.metadata,
+              msg.id
+            )
+            persistedMessageIdsRef.current.add(msg.id)
+            console.log("✅ User message persisted to localStorage successfully")
+          } catch (err) {
+            console.error("❌ Failed to persist user message:", err)
           }
+        } else {
+          console.log("Skipping non-user message in effect:", msg.role, msg.id)
         }
-      })()
+      }
     }
     previousMessagesLengthRef.current = messages.length
   }, [messages, persistenceEnabled, currentChat, persistMessage, normalizeContentForStorage])
 
   // Persist assistant message when streaming stops (detected by isLoading change)
   const previousIsLoadingRef = useRef(false)
+  
+  // Helper function to persist an assistant message
+  const persistAssistantMessage = useCallback((assistantMessage: any, chat: any) => {
+    if (!assistantMessage?.id || !chat) return false
+    if (persistedMessageIdsRef.current.has(assistantMessage.id)) return false
+    
+    const normalizedContent = normalizeContentForStorage(assistantMessage.content)
+    if (!normalizedContent.trim()) return false
+    
+    const chatId = chat.localId || chat.id
+    console.log("Persisting assistant message to localStorage:", assistantMessage.id, "to chat:", chatId)
+    try {
+      localChatStorage.addMessage(
+        chatId,
+        "assistant",
+        normalizedContent,
+        assistantMessage.metadata,
+        assistantMessage.id
+      )
+      persistedMessageIdsRef.current.add(assistantMessage.id)
+      console.log("✅ Assistant message persisted to localStorage:", assistantMessage.id)
+      return true
+    } catch (err) {
+      console.error("❌ Failed to persist assistant message:", assistantMessage.id, err)
+      return false
+    }
+  }, [normalizeContentForStorage])
+  
   useEffect(() => {
     // When loading transitions from true to false, the streaming has completed
     if (previousIsLoadingRef.current && !isLoading) {
       console.log("🎯 Stream completed, checking for assistant messages to persist")
       
-      // Find the most recent assistant message that hasn't been persisted
+      // Find ALL assistant messages that haven't been persisted
       const assistantMessages = messages.filter((m: any) => m.role === 'assistant')
-      if (assistantMessages.length > 0) {
-        const lastAssistantMessage = assistantMessages[assistantMessages.length - 1]
-        console.log("Last assistant message:", lastAssistantMessage.id, "Already persisted:", persistedMessageIdsRef.current.has(lastAssistantMessage.id))
-        
-        if (persistenceEnabled && currentChat && lastAssistantMessage.id && !persistedMessageIdsRef.current.has(lastAssistantMessage.id)) {
-          const normalizedContent = normalizeContentForStorage(lastAssistantMessage.content)
-          if (normalizedContent.trim()) {
-            console.log("Persisting assistant message:", lastAssistantMessage.id)
-            ;(async () => {
-              try {
-                await chatService.addMessage(
-                  currentChat.id,
-                  "assistant",
-                  normalizedContent,
-                  lastAssistantMessage.metadata,
-                  lastAssistantMessage.id
-                )
-                persistedMessageIdsRef.current.add(lastAssistantMessage.id)
-                console.log("✅ Assistant message persisted successfully after stream completion")
-              } catch (err) {
-                console.error("❌ Failed to persist assistant message after stream:", err)
-              }
-            })()
-          }
+      console.log(`Found ${assistantMessages.length} assistant messages total`)
+      
+      for (const assistantMessage of assistantMessages) {
+        const chat = currentChatRef.current || currentChat
+        if (!persistenceEnabled || !chat) {
+          console.log("No chat available for persistence, skipping assistant message:", assistantMessage.id)
+          continue
         }
-      } else {
-        console.log("No assistant messages found after stream completion")
+        persistAssistantMessage(assistantMessage, chat)
       }
     }
     previousIsLoadingRef.current = isLoading
-  }, [isLoading, persistenceEnabled, currentChat, messages, normalizeContentForStorage])
+  }, [isLoading, persistenceEnabled, currentChat, messages, persistAssistantMessage])
+  
+  // Safety net: Check for unpersisted assistant messages when messages change
+  // This catches cases where the isLoading transition might be missed
+  useEffect(() => {
+    if (!persistenceEnabled || isLoading) return
+    
+    const chat = currentChatRef.current || currentChat
+    if (!chat) return
+    
+    // Find assistant messages that haven't been persisted
+    // EXCLUDE placeholder messages like "Generating image..." or "Regenerating image..."
+    const unpersistedAssistant = messages.filter((m: any) => {
+      if (m.role !== 'assistant') return false
+      if (!m.id) return false
+      if (persistedMessageIdsRef.current.has(m.id)) return false
+      
+      const normalized = normalizeContentForStorage(m.content)
+      if (!normalized.trim()) return false
+      
+      // Skip image generation placeholders
+      if (normalized.includes('_Generating image') || 
+          normalized.includes('_Regenerating image') ||
+          normalized.includes('Image generation cancelled')) {
+        return false
+      }
+      
+      return true
+    })
+    
+    if (unpersistedAssistant.length > 0) {
+      // Use a small delay to ensure streaming is truly complete
+      const timer = setTimeout(() => {
+        console.log(`🛡️ Safety net: Found ${unpersistedAssistant.length} unpersisted assistant message(s)`)
+        for (const msg of unpersistedAssistant) {
+          persistAssistantMessage(msg, currentChatRef.current || currentChat)
+        }
+      }, 500)
+      return () => clearTimeout(timer)
+    }
+  }, [messages, isLoading, persistenceEnabled, currentChat, persistAssistantMessage, normalizeContentForStorage])
 
   useEffect(() => {
     if (!canUseMode(mode)) {
@@ -1068,22 +1187,42 @@ export default function FuturisticRadhika() {
 
   // Refresh the list of all chats
   const refreshChats = useCallback(async () => {
-    if (!persistenceEnabled || !getAllChats) return
+    if (!persistenceEnabled) return
+    
+    console.log("🔄 Refreshing chat history...")
     
     try {
       setIsLoadingAllChats(true)
       
-      // Set a safety timeout to ensure loading never hangs forever
-      const safetyTimeout = setTimeout(() => {
-        console.warn("Chat history load taking too long, clearing loading state")
-        setIsLoadingAllChats(false)
-      }, 30000) // 30 seconds max
+      // LOCAL-FIRST: Immediately show local chats (no waiting)
+      const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+      console.log(`📚 Local chats (immediate): ${localChats.length}`)
+      setAllChats(localChats)
       
-      const chats = await getAllChats()
-      clearTimeout(safetyTimeout)
+      // Then try to fetch and merge remote chats
+      if (getAllChats) {
+        // Set a safety timeout to ensure loading never hangs forever
+        const safetyTimeout = setTimeout(() => {
+          console.warn("⚠️ Remote fetch taking too long, stopping loading")
+          setIsLoadingAllChats(false)
+        }, 12000) // 12 seconds max
+        
+        try {
+          const mergedChats = await getAllChats()
+          clearTimeout(safetyTimeout)
+          
+          console.log(`✅ After remote merge: ${mergedChats?.length || 0} chats`)
+          setAllChats(mergedChats || localChats)
+        } catch (remoteErr) {
+          clearTimeout(safetyTimeout)
+          console.log("Remote fetch failed, keeping local chats:", remoteErr)
+          // Keep showing local chats - they're already set
+        }
+      }
       
-      setAllChats(chats)
-      if (currentChat && !chats.find((c) => c.id === currentChat.id)) {
+      // Check if current chat was deleted
+      const finalChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+      if (currentChat && !finalChats?.find((c) => c.id === currentChat.id || c.localId === currentChat.localId)) {
         // Current chat was deleted; detach and clear local messages
         clearCurrentChat?.()
         setMessages([])
@@ -1094,11 +1233,18 @@ export default function FuturisticRadhika() {
       }
     } catch (err) {
       console.error("Failed to refresh chats:", err)
+      // On error, try to at least show local chats
+      try {
+        const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+        setAllChats(localChats || [])
+      } catch {
+        setAllChats([])
+      }
     } finally {
       // Always clear loading state, even on error
       setIsLoadingAllChats(false)
     }
-  }, [persistenceEnabled, getAllChats, currentChat, clearCurrentChat, setMessages])
+  }, [persistenceEnabled, getAllChats, currentChat, clearCurrentChat, setMessages, mode, currentProfileId])
 
   // Create a chat only after the first message is present
   useEffect(() => {
@@ -1112,6 +1258,10 @@ export default function FuturisticRadhika() {
 
     // Capture any local messages present so we can persist them after the chat is created.
     const pendingMessages = messagesByModeRef.current[currentModeRef.current] ?? messages.slice()
+    
+    // IMPORTANT: Update previousMessagesLengthRef BEFORE async work starts
+    // This prevents the other useEffect from trying to persist the same messages
+    previousMessagesLengthRef.current = messages.length
 
     ;(async () => {
       try {
@@ -1119,19 +1269,35 @@ export default function FuturisticRadhika() {
         if (newChat) {
           // Mark as loaded to prevent immediate reload from clearing local messages
           hasLoadedRef.current = newChat.id
-          persistedMessageIdsRef.current = new Set()
+          // Don't clear persistedMessageIdsRef - preserve existing tracked IDs to prevent duplicates
+          
+          // IMMEDIATELY add new chat to allChats for sidebar visibility
+          setAllChats(prev => {
+            // Avoid duplicates
+            const exists = prev.some(c => c.id === newChat.id || (c as any).localId === (newChat as any).localId)
+            if (exists) return prev
+            return [newChat as Chat, ...prev]
+          })
 
           try {
+            // Persist ALL pending messages (both user and assistant)
             for (const msg of pendingMessages) {
               if (!msg || !msg.id) continue
               if (persistedMessageIdsRef.current.has(msg.id)) continue
-              if (msg.role !== "user") continue
 
               const normalized = normalizeContentForStorage(msg.content)
               if (!normalized || !normalized.trim()) continue
-
               try {
-                await chatService.addMessage(newChat.id, msg.role, normalized, msg.metadata, msg.id)
+                // Save to localStorage first - syncs to Supabase in background
+                const chatId = newChat.localId || newChat.id
+                console.log(`📝 Persisting ${msg.role} message to new chat:`, msg.id, "->", chatId)
+                localChatStorage.addMessage(
+                  chatId,
+                  msg.role as "user" | "assistant" | "system",
+                  normalized,
+                  msg.metadata,
+                  msg.id
+                )
                 persistedMessageIdsRef.current.add(msg.id)
               } catch (err) {
                 console.error("Failed to persist pending message during auto-create:", err)
@@ -1141,8 +1307,8 @@ export default function FuturisticRadhika() {
             console.error("Error while persisting pending messages after auto-create:", err)
           }
 
-          console.log("✅ Auto-created chat session:", newChat.id)
-          await refreshChats()
+          console.log("✅ Auto-created chat session:", newChat.id, "with", pendingMessages.length, "messages")
+          // No need for refreshChats here - we already added it to allChats
         }
       } catch (err) {
         console.error("❌ Failed to auto-create chat after first message:", err)
@@ -1150,7 +1316,7 @@ export default function FuturisticRadhika() {
         isCreatingChatRef.current = false
       }
     })()
-  }, [messages.length, persistenceEnabled, currentChat, createNewChat, refreshChats])
+  }, [messages.length, persistenceEnabled, currentChat, createNewChat])
 
   // Create a new chat session
   const handleNewChat = useCallback(async () => {
@@ -1247,10 +1413,12 @@ export default function FuturisticRadhika() {
     }
   }, [isMounted, handleSelectChat])
 
-  // Handle chat deletion
+  // Handle chat deletion - LOCAL-FIRST: Delete from localStorage immediately
   const handleDeleteChat = useCallback(async (chatId: string) => {
+    console.log("🗑️ Deleting chat:", chatId)
+    
     // If deleting current chat, clear it
-    if (currentChat?.id === chatId) {
+    if (currentChat?.id === chatId || currentChat?.localId === chatId) {
       clearCurrentChat()
       setMessages([])
       messagesByModeRef.current[mode] = []
@@ -1258,11 +1426,36 @@ export default function FuturisticRadhika() {
       previousMessagesLengthRef.current = 0
       persistedMessageIdsRef.current = new Set()
     }
+    
+    // LOCAL-FIRST: Delete from localStorage IMMEDIATELY (no waiting for server)
+    const deleted = localChatStorage.deleteChat(chatId)
+    console.log("🗑️ Deleted from localStorage:", deleted)
+    
     // Optimistically remove from local list
-    setAllChats((prev) => prev.filter((c) => c.id !== chatId))
-    // Refresh the list
-    await refreshChats()
-  }, [currentChat, mode, clearCurrentChat, setMessages, refreshChats])
+    setAllChats((prev) => prev.filter((c: any) => c.id !== chatId && c.localId !== chatId))
+    
+    // Background: Try to delete from server (don't wait, don't block)
+    // The cron job will clean up orphaned data anyway
+    chatService.deleteChat(chatId).catch(err => {
+      console.log("Background server delete failed (OK, cron will clean up):", err?.message)
+    })
+  }, [currentChat, mode, clearCurrentChat, setMessages])
+
+  // Handle deleting all chats
+  const handleDeleteAllChats = useCallback(async () => {
+    // Clear current chat and messages
+    clearCurrentChat()
+    setMessages([])
+    for (const modeKey of Object.keys(messagesByModeRef.current) as Mode[]) {
+      messagesByModeRef.current[modeKey] = []
+    }
+    hasLoadedRef.current = null
+    previousMessagesLengthRef.current = 0
+    persistedMessageIdsRef.current = new Set()
+    // Clear local list immediately
+    setAllChats([])
+    // deleteAllLocalChats is already called by the sidebar
+  }, [clearCurrentChat, setMessages])
 
   const handleRenameChat = useCallback(async (chatId: string, title: string) => {
     if (!persistenceEnabled) return
@@ -1305,28 +1498,81 @@ export default function FuturisticRadhika() {
   }, [persistenceEnabled])
 
   const handleFavoriteChange = useCallback((messageId: string, isFavorite: boolean) => {
+    // Update local UI state immediately
     setMessages((prev: any[]) => {
       const next = prev.map((msg: any) => msg.id === messageId ? { ...msg, isFavorite } : msg)
       messagesByModeRef.current[currentModeRef.current] = next
       return next
     })
-  }, [])
+    
+    // Update message in localChatStorage
+    localChatStorage.updateMessage(messageId, { isFavorite })
+    
+    // LOCAL-FIRST: Update local favorites storage
+    if (isFavorite) {
+      // Find the message to add to favorites
+      const message = messages.find((msg: any) => msg.id === messageId)
+      if (message) {
+        const localMessage = localChatStorage.getMessage(messageId)
+        const currentChatId = currentChatRef.current?.id || currentChatRef.current?.localId
+        const currentChatTitle = currentChatRef.current?.title
+        localFavoritesStorage.addFavorite({
+          messageId: messageId,
+          remoteMessageId: localMessage?.remoteId,
+          chatId: currentChatId || '',
+          remoteChatId: localMessage?.remoteChatId,
+          content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+          role: message.role as 'user' | 'assistant' | 'system',
+          mode: currentModeRef.current,
+          chatTitle: currentChatTitle || `${MODES[currentModeRef.current]?.label || 'General'} Chat`,
+          createdAt: message.createdAt || new Date().toISOString(),
+        })
+      }
+    } else {
+      // Remove from favorites
+      localFavoritesStorage.removeFavorite(messageId)
+    }
+  }, [messages])
 
   // Load all chats when mode changes or user becomes authenticated
+  // LOCAL-FIRST: Show local chats immediately, then fetch remote in background
   useEffect(() => {
     if (persistenceEnabled) {
-      // Don't block UI - load chats in background with longer timeout tolerance
-      refreshChats().catch(err => {
-        console.log("Background chat refresh failed (this is OK):", err.message)
-        // Ensure loading state is cleared even if refresh fails
-        setIsLoadingAllChats(false)
-      })
+      // IMMEDIATELY show local chats (no waiting)
+      const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+      console.log(`📚 Immediate local chats: ${localChats.length}`)
+      setAllChats(localChats)
+      
+      // Then fetch remote in background (don't block UI)
+      setIsLoadingAllChats(true)
+      refreshChats()
+        .catch(err => {
+          console.log("Background chat refresh failed (this is OK):", err?.message)
+        })
+        .finally(() => {
+          setIsLoadingAllChats(false)
+        })
     } else {
       // Clear chats and loading state when not authenticated
       setAllChats([])
       setIsLoadingAllChats(false)
     }
-  }, [persistenceEnabled, mode, refreshChats])
+  }, [persistenceEnabled, mode, currentProfileId])
+
+  // Refresh chats when page becomes visible (e.g., navigating back from favorites)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && persistenceEnabled) {
+        // Reload local chats immediately when returning to the page
+        const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+        console.log(`👁️ Page visible - refreshing chats: ${localChats.length}`)
+        setAllChats(localChats)
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [persistenceEnabled, mode, currentProfileId])
 
   const handleVoiceInput = useCallback(() => {
     startListening((transcript: string) => {
@@ -1358,7 +1604,6 @@ export default function FuturisticRadhika() {
         setSelectedProvider(nextProvider as KeyProvider)
         setTempApiKey("")
         setIsApiKeyDialogOpen(true)
-        setError(`Add your ${PROVIDERS[nextProvider].name} API key to continue.`)
         return
       }
 
@@ -1562,7 +1807,6 @@ export default function FuturisticRadhika() {
         setSelectedProvider(provider as KeyProvider)
         setTempApiKey("")
         setIsApiKeyDialogOpen(true)
-        setError(`Add your ${PROVIDERS[provider].name} API key to continue.`)
         return
       }
 
@@ -1753,26 +1997,38 @@ export default function FuturisticRadhika() {
 
         const markdown = `![Generated image](${data.imageUrl})\n\n*${data.provider} · ${data.model} · ${data.size}*\n\n**Prompt:** ${data.prompt}`
 
+        // Update the message in UI first
         setMessages((prev: any) =>
           prev.map((message: any) => (message.id === placeholderId ? { ...message, content: markdown } : message)),
         )
         
-        // Persist the image message to database (use refs for current values)
+        // Persist the image message to localStorage AFTER updating the content
         const currentPersistenceEnabled = persistenceEnabledRef.current
         const chatToUse = currentChatRef.current
         
-        if (currentPersistenceEnabled && chatToUse && placeholderId && !persistedMessageIdsRef.current.has(placeholderId)) {
-          console.log(`💾 Persisting image message: ${placeholderId} 📸 to chat: ${chatToUse.id}`)
+        if (currentPersistenceEnabled && chatToUse && placeholderId) {
+          const chatId = chatToUse.localId || chatToUse.id
+          
+          // Check if this message was already persisted with the placeholder content
+          const wasAlreadyPersisted = persistedMessageIdsRef.current.has(placeholderId)
+          
+          console.log(`💾 Persisting/updating image message: ${placeholderId} 📸 to chat: ${chatId}`, {
+            wasAlreadyPersisted,
+            markdown: markdown.substring(0, 50) + '...'
+          })
+          
           try {
-            await chatService.addMessage(
-              chatToUse.id,
+            // Always save/update with the final markdown content
+            // This will overwrite any "Generating image..." placeholder that was saved
+            localChatStorage.addMessage(
+              chatId,
               "assistant",
               markdown,
               undefined,
               placeholderId
             )
             persistedMessageIdsRef.current.add(placeholderId)
-            console.log("✅ Image message persisted successfully")
+            console.log("✅ Image message persisted/updated to localStorage successfully")
           } catch (err) {
             console.error("❌ Failed to persist image message:", err)
           }
@@ -1781,8 +2037,7 @@ export default function FuturisticRadhika() {
             persistenceEnabled: currentPersistenceEnabled,
             hasChat: !!chatToUse,
             chatId: chatToUse?.id,
-            placeholderId,
-            alreadyPersisted: persistedMessageIdsRef.current.has(placeholderId)
+            placeholderId
           })
         }
       } catch (error) {
@@ -2339,6 +2594,8 @@ export default function FuturisticRadhika() {
             heatmapAvailable={isAuthenticated}
             currentProfileId={currentProfileId}
             onProfileSelect={handleProfileSelect}
+            pendingQueueCount={pendingQueueCount}
+            onSyncQueue={syncQueue}
           />
         }
         insights={insightsPanel}
@@ -2443,7 +2700,8 @@ export default function FuturisticRadhika() {
           currentChatId={currentChat?.id}
           onSelectChat={handleSelectChat}
           onDeleteChat={handleDeleteChat}
-            onRenameChat={handleRenameChat}
+          onDeleteAllChats={handleDeleteAllChats}
+          onRenameChat={handleRenameChat}
           onRefresh={refreshChats}
           isLoading={isLoadingAllChats}
         />

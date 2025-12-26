@@ -50,8 +50,6 @@ export function useSpeech() {
       };
 
       recognitionInstance.onerror = (event: any) => {
-        console.error("Speech recognition error:", event.error);
-        setError(`Speech recognition error: ${event.error}`);
         setIsListening(false);
       };
 
