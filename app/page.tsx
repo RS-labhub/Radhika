@@ -21,17 +21,28 @@ import { ChatTopbar } from "@/components/chat/topbar"
 import { ChatFeed } from "@/components/chat/chat-feed"
 import { ChatComposer } from "@/components/chat/chat-composer"
 import { SidebarDrawer } from "@/components/chat/sidebar-drawer"
+import { ChatHistorySidebar } from "@/components/chat/chat-history-sidebar"
 import { InsightsPanel } from "@/components/chat/insights-panel"
 import { ActivityMatrix } from "@/components/activity-matrix"
+import { Button } from "@/components/ui/button"
 import { ApiKeyDialog } from "@/components/dialog/api-key-dialog"
-import { SettingsDialog } from "@/components/dialog/settings-dialog"
 import { ImageSettingsDialog } from "@/components/dialog/image-settings-dialog"
-import { PersonalizationDialog } from "@/components/dialog/personalization-dialog"
+import { ExportDialog } from "@/components/chat/export-dialog"
 import { CodeBlock } from "@/components/chat/code-block"
+import { useChatPersistence } from "@/hooks/use-chat-persistence"
 import { GeneratedImage } from "@/components/chat/generated-image"
 import { useSpeech } from "@/hooks/use-speech"
+import { UserMenu } from "@/components/auth/user-menu"
+import { useFeatureAccess } from "@/hooks/use-feature-access"
+import { useAuth } from "@/contexts/auth-context"
+import { useTheme } from "next-themes"
+import { chatService } from "@/lib/supabase/chat-service"
+import { localChatStorage } from "@/lib/services/local-chat-storage"
+import { localFavoritesStorage } from "@/lib/services/local-favorites-storage"
 
-import type { KeyProvider, KeyProviderMetadata, Mode, ModeDefinition, Provider, ProviderDefinition, UIStyle, UserGender, UserAge, UserPersonalization } from "@/types/chat"
+import type { KeyProvider, KeyProviderMetadata, Mode, ModeDefinition, Provider, ProviderDefinition, UIStyle, UserGender, UserAge, UserPersonalization, Chat } from "@/types/chat"
+import { cn } from "@/lib/utils"
+import { useToast } from "@/components/ui/use-toast"
 import type { ImageProviderId, ImageSettings } from "@/types/image"
 import { IMAGE_PROVIDERS, DEFAULT_IMAGE_PROVIDER } from "@/lib/image-providers"
 import { truncate } from "fs"
@@ -185,8 +196,12 @@ type MessagesByMode = Record<Mode, any[]>
 type ApiKeyMap = {
   openai: string
   claude: string
+  groq: string
+  gemini: string
   huggingface: string
 }
+
+type ProviderModelMap = Record<Provider, string>
 
 const IMAGE_SETTINGS_STORAGE_KEY = "radhika-image-settings"
 const LEGACY_IMAGE_PROVIDER_KEYS_STORAGE_KEY = "radhika-image-provider-keys"
@@ -258,35 +273,160 @@ const sanitizeImageSettings = (raw: Partial<ImageSettings> | null | undefined): 
 }
 
 export default function FuturisticRadhika() {
+  const { theme, setTheme } = useTheme()
+  const [isMounted, setIsMounted] = useState(false)
+
+  useEffect(() => {
+    setIsMounted(true)
+  }, [])
   const [mode, setMode] = useState<Mode>("general")
   const [provider, setProvider] = useState<Provider>("gemini")
-  const [darkMode, setDarkMode] = useState(false)
   const [uiStyle, setUIStyle] = useState<UIStyle>("modern")
   const [error, setError] = useState<string | null>(null)
   const [navigationOpen, setNavigationOpen] = useState(false)
-  const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false)
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false)
   const [isApiKeyDialogOpen, setIsApiKeyDialogOpen] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState<KeyProvider>("groq")
   const [tempApiKey, setTempApiKey] = useState("")
 
   const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false)
   const [isImageSettingsDialogOpen, setIsImageSettingsDialogOpen] = useState(false)
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false)
   const [imageSettings, setImageSettings] = useState<ImageSettings>(() => createDefaultImageSettings())
   const [isGeneratingImage, setIsGeneratingImage] = useState(false)
+  const isGeneratingImageRef = useRef(false)
   const [isChatLoading, setIsChatLoading] = useState(false)
+
+  const chatAbortControllerRef = useRef<AbortController | null>(null)
+  const isChatLoadingRef = useRef(false)
+  const handleComposerSubmitRef = useRef<((event: FormEvent<HTMLFormElement>) => Promise<void>) | null>(null)
+
+  const imageAbortControllerRef = useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    isChatLoadingRef.current = isChatLoading
+  }, [isChatLoading])
+
+  // Load saved UI style (modern/pixel) from localStorage
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const savedStyle = localStorage.getItem("ui_style")
+    if (savedStyle === "pixel" || savedStyle === "modern") {
+      setUIStyle(savedStyle)
+    }
+  }, [])
 
   // User personalization settings
   const [userPersonalization, setUserPersonalization] = useState<UserPersonalization>({
     gender: "boy",
     age: "teenage",
+    tone: "friendly",
   })
-  const [isPersonalizationDialogOpen, setIsPersonalizationDialogOpen] = useState(false)
 
   const [apiKeys, setApiKeys] = useState<ApiKeyMap>(() => ({
     openai: "",
     claude: "",
+    groq: "",
+    gemini: "",
     huggingface: "",
   }))
+
+  const [modelPreferences, setModelPreferences] = useState<ProviderModelMap>(() => ({
+    groq: PROVIDERS.groq.models[0],
+    gemini: PROVIDERS.gemini.models[0],
+    openai: PROVIDERS.openai.models[0],
+    claude: PROVIDERS.claude.models[0],
+  }))
+
+  const resolveModel = useCallback((providerKey: Provider) => {
+    const pref = modelPreferences[providerKey]
+    if (pref?.startsWith("custom:")) {
+      return pref.replace("custom:", "") || modelPreferences[providerKey]
+    }
+    return pref
+  }, [modelPreferences])
+
+  const { isAuthenticated, canUseMode, canUsePersonalization } = useFeatureAccess()
+  const { user } = useAuth()
+  // Default: insights panel expanded
+  const [isInsightsCollapsed, setIsInsightsCollapsed] = useState(false)
+
+  // Chat profile state
+  const [currentProfileId, setCurrentProfileId] = useState<string | null>(null)
+
+  // Chat persistence hook for saving messages to database
+  const {
+    currentChat,
+    isLoadingChat,
+    loadMessages: loadPersistedMessages,
+    addMessage: persistMessage,
+    createNewChat,
+    loadChat,
+    getAllChats,
+    clearCurrentChat,
+    deleteAllChats: deleteAllLocalChats,
+    isEnabled: persistenceEnabled,
+    // Queue-related exports
+    getQueueStatus,
+    syncQueue,
+    subscribeToQueue,
+  } = useChatPersistence(mode, currentProfileId || undefined)
+
+  const { toast } = useToast()
+
+  // Track pending queue items
+  const [pendingQueueCount, setPendingQueueCount] = useState(0)
+
+  // Subscribe to queue events for UI feedback
+  useEffect(() => {
+    const unsubscribe = subscribeToQueue((event, data) => {
+      console.log("📬 Queue event:", event, data)
+      
+      // Update pending count
+      const status = getQueueStatus()
+      setPendingQueueCount(status.messageCount + status.chatCount)
+      
+      // Show toast notifications for important events
+      if (event === "message-saved" || event === "chat-created") {
+        toast({
+          title: "Synced successfully",
+          description: "Pending messages have been saved to the cloud.",
+          duration: 3000,
+        })
+      } else if (event === "message-failed" || event === "chat-failed") {
+        toast({
+          title: "Sync failed",
+          description: "Some messages could not be saved. Will retry later.",
+          variant: "destructive",
+          duration: 5000,
+        })
+      }
+    })
+    
+    // Check initial queue status
+    const status = getQueueStatus()
+    setPendingQueueCount(status.messageCount + status.chatCount)
+    
+    return unsubscribe
+  }, [subscribeToQueue, getQueueStatus, toast])
+
+  // Subscribe to local chat storage events to update allChats in real-time
+  useEffect(() => {
+    const unsubscribe = localChatStorage.subscribe((event, data) => {
+      // When a chat is created or updated, refresh the chat list
+      if (event === 'chat-created' || event === 'chat-synced' || event === 'data-loaded') {
+        if (persistenceEnabled) {
+          const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+          setAllChats(localChats as Chat[])
+        }
+      }
+    })
+    return unsubscribe
+  }, [persistenceEnabled, mode, currentProfileId])
+
+  // State for all chats in current mode
+  const [allChats, setAllChats] = useState<Chat[]>([])
+  const [isLoadingAllChats, setIsLoadingAllChats] = useState(false)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesByModeRef = useRef<MessagesByMode>({
@@ -299,6 +439,18 @@ export default function FuturisticRadhika() {
   })
   const currentModeRef = useRef<Mode>(mode)
   currentModeRef.current = mode
+  const persistedMessageIdsRef = useRef<Set<string>>(new Set())
+  const isCreatingChatRef = useRef(false)
+  const currentChatRef = useRef(currentChat)
+  const persistenceEnabledRef = useRef(persistenceEnabled)
+  
+  // Keep refs updated
+  useEffect(() => {
+    currentChatRef.current = currentChat
+    persistenceEnabledRef.current = persistenceEnabled
+  }, [currentChat, persistenceEnabled])
+  
+  const [voiceAllowed, setVoiceAllowed] = useState(false)
 
   const {
     isListening,
@@ -317,12 +469,54 @@ export default function FuturisticRadhika() {
   const voiceEnabledRef = useRef(voiceEnabled)
   voiceEnabledRef.current = voiceEnabled
 
+  // Respect voice preference stored from settings
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const storedVoice = localStorage.getItem("voice_enabled")
+    const allowed = storedVoice === "true"
+    setVoiceAllowed(allowed)
+    setVoiceEnabled(allowed)
+  }, [setVoiceEnabled])
+
   const currentApiKey = useMemo(() => {
-    if (!PROVIDERS[provider].requiresApiKey) return ""
-    if (provider === "openai") return apiKeys.openai
-    if (provider === "claude") return apiKeys.claude
+    const selectedKey = apiKeys[provider as keyof ApiKeyMap]
+    if (selectedKey) return selectedKey
+    if (PROVIDERS[provider].requiresApiKey) return ""
     return ""
   }, [provider, apiKeys])
+
+  // Helper to normalize message content for storage
+  const normalizeContentForStorage = useCallback((content: any): string => {
+    if (typeof content === "string") return content
+    if (Array.isArray(content)) {
+      return content
+        .map((part) => {
+          if (typeof part === "string") return part
+          if (part && typeof part === "object") {
+            // Handle image content - convert to markdown
+            const partObj = part as any
+            if (partObj.type === "image" && partObj.image) {
+              const imageUrl = typeof partObj.image === "string" ? partObj.image : partObj.image.url
+              return `![${partObj.alt || "Image"}](${imageUrl})`
+            }
+            // Handle text content
+            if (typeof partObj.text === "string") return partObj.text
+            if (typeof partObj.value === "string") return partObj.value
+          }
+          return ""
+        })
+        .join("\n\n")
+    }
+    if (content && typeof content === "object") {
+      if (typeof (content as any).text === "string") return (content as any).text
+      try {
+        return JSON.stringify(content)
+      } catch {
+        return String(content)
+      }
+    }
+    return content == null ? "" : String(content)
+  }, [])
 
   const chatConfig = useMemo(
     () => ({
@@ -330,8 +524,10 @@ export default function FuturisticRadhika() {
       body: {
         mode,
         provider,
+        model: resolveModel(provider),
         userGender: userPersonalization.gender,
         userAge: userPersonalization.age,
+        conversationTone: mode === "bff" ? undefined : userPersonalization.tone,
         ...(currentApiKey ? { apiKey: currentApiKey } : {}),
       },
       onError: (incomingError: Error) => {
@@ -343,14 +539,88 @@ export default function FuturisticRadhika() {
             : message,
         )
       },
-      onFinish: (message: any) => {
+      onFinish: async (message: any) => {
+        console.log("=== onFinish called ===")
+        console.log("Message:", JSON.stringify(message, null, 2))
+        console.log("Current chat:", currentChat?.id)
+        console.log("Persistence enabled:", persistenceEnabled)
+        
         setError(null)
+        
+        // Ensure we have a chat before persisting
+        let chatToUse = currentChat
+        if (!chatToUse && persistenceEnabled && createNewChat && !isCreatingChatRef.current) {
+          console.log("Creating new chat for assistant message...")
+          isCreatingChatRef.current = true
+          try {
+            const newChat = await createNewChat()
+            if (newChat) {
+              chatToUse = newChat
+              hasLoadedRef.current = newChat.id
+              persistedMessageIdsRef.current = new Set()
+              console.log("New chat created:", newChat.id)
+            }
+          } catch (err) {
+            console.error("Failed to create chat in onFinish:", err)
+          } finally {
+            isCreatingChatRef.current = false
+          }
+        }
+        
+        // Persist the completed assistant message to localStorage first, then sync to Supabase
+        if (persistenceEnabled && chatToUse && message?.id && message?.content) {
+          console.log("Conditions met, attempting to persist assistant message")
+          console.log("Chat ID:", chatToUse.id, "LocalId:", chatToUse.localId)
+          console.log("Message ID:", message.id)
+          console.log("Content length:", message.content.length)
+          
+          const normalizedContent = normalizeContentForStorage(message.content)
+          console.log("Normalized content length:", normalizedContent.length)
+          
+          if (normalizedContent.trim() && !persistedMessageIdsRef.current.has(message.id)) {
+            console.log("Persisting assistant message to localStorage NOW...")
+            try {
+              // Use localStorage first - always works instantly
+              const chatId = chatToUse.localId || chatToUse.id
+              const savedMessage = localChatStorage.addMessage(
+                chatId,
+                (message.role || "assistant") as "user" | "assistant" | "system",
+                normalizedContent,
+                message.metadata,
+                message.id
+              )
+              persistedMessageIdsRef.current.add(message.id)
+              console.log("✅ Successfully persisted assistant message to localStorage:", savedMessage.localId)
+            } catch (err) {
+              console.error("❌ Failed to persist assistant message:", err)
+              console.error("Error details:", JSON.stringify(err, null, 2))
+            }
+          } else {
+            console.log("Skipping assistant message persistence:", {
+              isEmpty: !normalizedContent.trim(),
+              alreadyPersisted: persistedMessageIdsRef.current.has(message.id)
+            })
+          }
+        } else {
+          console.log("❌ Skipping assistant message persistence - conditions not met:", {
+            persistenceEnabled,
+            hasCurrentChat: !!chatToUse,
+            chatId: chatToUse?.id,
+            hasMessageId: !!message?.id,
+            messageId: message?.id,
+            hasContent: !!message?.content,
+            contentPreview: message?.content?.substring(0, 50)
+          })
+        }
+        
         if (voiceEnabledRef.current && message?.content) {
           speakMessage(message.content, undefined, mode)
         }
+        
+        console.log("=== onFinish completed ===\n")
       },
     }),
-    [mode, provider, currentApiKey, speakMessage, userPersonalization],
+    [mode, provider, currentApiKey, speakMessage, userPersonalization, resolveModel, persistenceEnabled, currentChat, normalizeContentForStorage, createNewChat],
   )
 
   const chatHelpers: any = useChat(chatConfig)
@@ -402,25 +672,322 @@ export default function FuturisticRadhika() {
   }, [])
   
   // Ensure handleSubmit always works - this is critical for messages to be sent
-  const handleSubmit = useCallback((e: FormEvent<HTMLFormElement>) => {
-    if (handleSubmitRef.current) {
-      handleSubmitRef.current(e)
-    } else {
-      e.preventDefault()
+  const handleSubmit = useCallback(async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+
+    // If we're currently streaming, treat submit as a "stop" action
+    if (isChatLoadingRef.current || isGeneratingImageRef.current) {
+      console.log("⛔ Stopping streaming response...")
+      if (isChatLoadingRef.current) {
+        chatAbortControllerRef.current?.abort()
+        chatAbortControllerRef.current = null
+        setIsChatLoading(false)
+      }
+
+      if (isGeneratingImageRef.current) {
+        imageAbortControllerRef.current?.abort()
+        imageAbortControllerRef.current = null
+        isGeneratingImageRef.current = false
+        setIsGeneratingImage(false)
+      }
+      return
     }
+    
+    // Ensure we have a chat session before submitting
+    if (persistenceEnabled && !currentChat && createNewChat && !isCreatingChatRef.current) {
+      console.log("📝 Creating new chat session before message submission...")
+      isCreatingChatRef.current = true
+      try {
+        const newChat = await createNewChat()
+        if (newChat) {
+          console.log("✅ New chat created:", newChat.id)
+          // Mark this chat as "loaded" so the persisted loader won't immediately replace local optimistic UI while we still need to add the first message.
+          try {
+            hasLoadedRef.current = newChat.id
+            persistedMessageIdsRef.current = new Set()
+          } catch (e) {
+            // ignore
+          }
+          // IMMEDIATELY add new chat to allChats for sidebar visibility
+          setAllChats(prev => {
+            // Avoid duplicates
+            const exists = prev.some(c => c.id === newChat.id || (c as any).localId === (newChat as any).localId)
+            if (exists) return prev
+            return [newChat as Chat, ...prev]
+          })
+          // Small delay to ensure state updates
+          await new Promise(resolve => setTimeout(resolve, 100))
+        }
+      } catch (err) {
+        console.error("❌ Failed to create chat session:", err)
+      } finally {
+        isCreatingChatRef.current = false
+      }
+    }
+    
+    // Always use our composer handler (it routes to either image generation or chat)
+    if (handleComposerSubmitRef.current) {
+      await handleComposerSubmitRef.current(e)
+    } else {
+      console.warn("handleComposerSubmit not ready yet")
+    }
+  }, [persistenceEnabled, currentChat, createNewChat])
+
+  const stopStreaming = useCallback(() => {
+    if (!isChatLoadingRef.current) return
+    console.log("⛔ Stop requested by user")
+    chatAbortControllerRef.current?.abort()
+    chatAbortControllerRef.current = null
+    setIsChatLoading(false)
   }, [])
+
+  const stopImageGeneration = useCallback(() => {
+    if (!isGeneratingImageRef.current) return
+    console.log("⛔ Stopping image generation...")
+    imageAbortControllerRef.current?.abort()
+    imageAbortControllerRef.current = null
+    isGeneratingImageRef.current = false
+    setIsGeneratingImage(false)
+  }, [])
+
 
   useEffect(() => {
     messagesByModeRef.current[currentModeRef.current] = [...messages]
   }, [messages])
 
+  // Load persisted messages when authenticated and chat is available
+  const hasLoadedRef = useRef<string | null>(null)
+  const isRestoringRef = useRef(false)
   useEffect(() => {
-    if (darkMode) {
-      document.documentElement.classList.add("dark")
-    } else {
-      document.documentElement.classList.remove("dark")
+    const loadPersistedChat = async () => {
+      if (!persistenceEnabled || !currentChat || hasLoadedRef.current === currentChat.id || isLoadingChat) return
+      
+      try {
+        isRestoringRef.current = true
+        persistedMessageIdsRef.current = new Set()
+        const savedMessages = await loadPersistedMessages()
+        // Convert to the format useChat expects
+        const formattedMessages = savedMessages.map((msg) => ({
+          id: msg.id,
+          role: msg.role as "user" | "assistant" | "system",
+          content: msg.content,
+          createdAt: msg.createdAt ? new Date(msg.createdAt as string) : undefined,
+          isFavorite: msg.isFavorite,
+        }))
+        // Track restored IDs so we don't immediately attempt to re-persist them
+        for (const msg of savedMessages) {
+          if (msg.id) {
+            persistedMessageIdsRef.current.add(msg.id)
+          }
+        }
+        // Merge persisted messages with any existing local messages to avoid
+        // clobbering optimistic UI entries (e.g., the first user message).
+        const localMessages = messagesByModeRef.current[mode] ?? messages ?? []
+
+        // Build map of messages from persisted list (DB-first), then overlay local messages
+        const map = new Map<string, any>()
+        for (const m of formattedMessages) {
+          if (m?.id) map.set(m.id, m)
+        }
+        for (const lm of localMessages) {
+          if (lm?.id) {
+            // Prefer local message content (optimistic) over DB when IDs collide
+            map.set(lm.id, { ...map.get(lm.id), ...lm })
+          }
+        }
+
+        const merged = Array.from(map.values()).sort((a: any, b: any) => {
+          const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0
+          const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0
+          return ta - tb
+        })
+
+        setMessages(merged)
+        messagesByModeRef.current[mode] = merged
+        hasLoadedRef.current = currentChat.id
+        previousMessagesLengthRef.current = merged.length
+        isRestoringRef.current = false
+      } catch (err) {
+        console.error("Failed to load persisted messages:", err)
+        isRestoringRef.current = false
+      }
     }
-  }, [darkMode])
+    
+    loadPersistedChat()
+  }, [persistenceEnabled, currentChat, isLoadingChat, loadPersistedMessages, setMessages, mode])
+
+  // Reset load flag when mode changes
+  useEffect(() => {
+    hasLoadedRef.current = null
+  }, [mode])
+
+  // Persist new messages to database
+  const previousMessagesLengthRef = useRef(0)
+  
+  useEffect(() => {
+    // Use ref to get latest currentChat value
+    const chat = currentChatRef.current || currentChat
+    
+    if (!persistenceEnabled || !chat || messages.length === 0) return
+    if (isRestoringRef.current) {
+      // Skip persisting when we're just restoring from DB to avoid duplicates
+      previousMessagesLengthRef.current = messages.length
+      isRestoringRef.current = false
+      return
+    }
+    // Skip if we're in the middle of creating a chat (auto-create handles persistence)
+    if (isCreatingChatRef.current) return
+    
+    // Only persist if we have new messages
+    if (messages.length > previousMessagesLengthRef.current) {
+      const newMessages = messages.slice(previousMessagesLengthRef.current)
+      console.log("New messages detected:", newMessages.length, newMessages.map((m: any) => ({ id: m.id, role: m.role })))
+      
+      // Process messages - save to localStorage immediately
+      for (const msg of newMessages) {
+        if (!msg?.id) continue
+        const normalizedContent = normalizeContentForStorage(msg.content)
+        const trimmed = normalizedContent.trim()
+        
+        // Skip if we've already persisted this ID
+        if (persistedMessageIdsRef.current.has(msg.id)) continue
+        
+        // Only persist user messages here
+        // Assistant messages will be persisted when streaming completes
+        if (msg.role === "user" && trimmed) {
+          const chatId = chat.localId || chat.id
+          console.log("Persisting user message to localStorage:", msg.id, "to chat:", chatId)
+          try {
+            // Save to localStorage first - always works instantly, syncs to Supabase in background
+            localChatStorage.addMessage(
+              chatId,
+              msg.role as "user" | "assistant" | "system",
+              normalizedContent,
+              msg.metadata,
+              msg.id
+            )
+            persistedMessageIdsRef.current.add(msg.id)
+            console.log("✅ User message persisted to localStorage successfully")
+          } catch (err) {
+            console.error("❌ Failed to persist user message:", err)
+          }
+        } else {
+          console.log("Skipping non-user message in effect:", msg.role, msg.id)
+        }
+      }
+    }
+    previousMessagesLengthRef.current = messages.length
+  }, [messages, persistenceEnabled, currentChat, persistMessage, normalizeContentForStorage])
+
+  // Persist assistant message when streaming stops (detected by isLoading change)
+  const previousIsLoadingRef = useRef(false)
+  
+  // Helper function to persist an assistant message
+  const persistAssistantMessage = useCallback((assistantMessage: any, chat: any) => {
+    if (!assistantMessage?.id || !chat) return false
+    if (persistedMessageIdsRef.current.has(assistantMessage.id)) return false
+    
+    const normalizedContent = normalizeContentForStorage(assistantMessage.content)
+    if (!normalizedContent.trim()) return false
+    
+    const chatId = chat.localId || chat.id
+    console.log("Persisting assistant message to localStorage:", assistantMessage.id, "to chat:", chatId)
+    try {
+      localChatStorage.addMessage(
+        chatId,
+        "assistant",
+        normalizedContent,
+        assistantMessage.metadata,
+        assistantMessage.id
+      )
+      persistedMessageIdsRef.current.add(assistantMessage.id)
+      console.log("✅ Assistant message persisted to localStorage:", assistantMessage.id)
+      return true
+    } catch (err) {
+      console.error("❌ Failed to persist assistant message:", assistantMessage.id, err)
+      return false
+    }
+  }, [normalizeContentForStorage])
+  
+  useEffect(() => {
+    // When loading transitions from true to false, the streaming has completed
+    if (previousIsLoadingRef.current && !isLoading) {
+      console.log("🎯 Stream completed, checking for assistant messages to persist")
+      
+      // Find ALL assistant messages that haven't been persisted
+      const assistantMessages = messages.filter((m: any) => m.role === 'assistant')
+      console.log(`Found ${assistantMessages.length} assistant messages total`)
+      
+      for (const assistantMessage of assistantMessages) {
+        const chat = currentChatRef.current || currentChat
+        if (!persistenceEnabled || !chat) {
+          console.log("No chat available for persistence, skipping assistant message:", assistantMessage.id)
+          continue
+        }
+        persistAssistantMessage(assistantMessage, chat)
+      }
+    }
+    previousIsLoadingRef.current = isLoading
+  }, [isLoading, persistenceEnabled, currentChat, messages, persistAssistantMessage])
+  
+  // Safety net: Check for unpersisted assistant messages when messages change
+  // This catches cases where the isLoading transition might be missed
+  useEffect(() => {
+    if (!persistenceEnabled || isLoading) return
+    
+    const chat = currentChatRef.current || currentChat
+    if (!chat) return
+    
+    // Find assistant messages that haven't been persisted
+    // EXCLUDE placeholder messages like "Generating image..." or "Regenerating image..."
+    const unpersistedAssistant = messages.filter((m: any) => {
+      if (m.role !== 'assistant') return false
+      if (!m.id) return false
+      if (persistedMessageIdsRef.current.has(m.id)) return false
+      
+      const normalized = normalizeContentForStorage(m.content)
+      if (!normalized.trim()) return false
+      
+      // Skip image generation placeholders
+      if (normalized.includes('_Generating image') || 
+          normalized.includes('_Regenerating image') ||
+          normalized.includes('Image generation cancelled')) {
+        return false
+      }
+      
+      return true
+    })
+    
+    if (unpersistedAssistant.length > 0) {
+      // Use a small delay to ensure streaming is truly complete
+      const timer = setTimeout(() => {
+        console.log(`🛡️ Safety net: Found ${unpersistedAssistant.length} unpersisted assistant message(s)`)
+        for (const msg of unpersistedAssistant) {
+          persistAssistantMessage(msg, currentChatRef.current || currentChat)
+        }
+      }, 500)
+      return () => clearTimeout(timer)
+    }
+  }, [messages, isLoading, persistenceEnabled, currentChat, persistAssistantMessage, normalizeContentForStorage])
+
+  useEffect(() => {
+    if (!canUseMode(mode)) {
+      const allowed = (Object.keys(MODES) as Mode[]).filter((modeKey) => canUseMode(modeKey))
+      const fallbackMode = allowed.includes("general") ? "general" : allowed[0] ?? "general"
+      setMode(fallbackMode)
+      setMessages(messagesByModeRef.current[fallbackMode] ?? [])
+    }
+  }, [mode, canUseMode, setMessages])
+
+  useEffect(() => {
+    if (!isAuthenticated && mode !== "general") {
+      setMode("general")
+      setMessages(messagesByModeRef.current.general ?? [])
+    }
+  }, [isAuthenticated, mode, setMessages])
+  useEffect(() => {
+    setIsInsightsCollapsed(!isAuthenticated)
+  }, [isAuthenticated])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -428,10 +995,12 @@ export default function FuturisticRadhika() {
     const nextKeys: ApiKeyMap = {
       openai: "",
       claude: "",
+      groq: "",
+      gemini: "",
       huggingface: "",
     }
 
-    try {
+  try {
       const savedApiKeys = localStorage.getItem("radhika-api-keys")
       if (savedApiKeys) {
         const parsed = JSON.parse(savedApiKeys) as Partial<ApiKeyMap>
@@ -442,6 +1011,12 @@ export default function FuturisticRadhika() {
           if (typeof parsed.claude === "string") {
             nextKeys.claude = parsed.claude
           }
+          if (typeof parsed.groq === "string") {
+            nextKeys.groq = parsed.groq
+          }
+          if (typeof parsed.gemini === "string") {
+            nextKeys.gemini = parsed.gemini
+          }
           if (typeof parsed.huggingface === "string") {
             nextKeys.huggingface = parsed.huggingface
           }
@@ -449,6 +1024,17 @@ export default function FuturisticRadhika() {
       }
     } catch (parseError) {
       console.error("Failed to parse saved API keys", parseError)
+    }
+
+    // Fallback: read individual provider keys saved from the settings page
+    try {
+      if (!nextKeys.openai) nextKeys.openai = localStorage.getItem("openai_api_key") || ""
+      if (!nextKeys.claude) nextKeys.claude = localStorage.getItem("claude_api_key") || ""
+      if (!nextKeys.groq) nextKeys.groq = localStorage.getItem("groq_api_key") || ""
+      if (!nextKeys.gemini) nextKeys.gemini = localStorage.getItem("gemini_api_key") || ""
+      if (!nextKeys.huggingface) nextKeys.huggingface = localStorage.getItem("huggingface_api_key") || ""
+    } catch (fallbackError) {
+      console.error("Failed to read legacy API key storage", fallbackError)
     }
 
     try {
@@ -498,10 +1084,32 @@ export default function FuturisticRadhika() {
           setUserPersonalization((prev) => ({
             gender: parsed.gender && ["boy", "girl", "other"].includes(parsed.gender) ? parsed.gender : prev.gender,
             age: parsed.age && ["kid", "teenage", "mature", "senior"].includes(parsed.age) ? parsed.age : prev.age,
+            tone: parsed.tone && ["professional", "casual", "friendly", "empathetic", "playful"].includes(parsed.tone)
+              ? parsed.tone
+              : prev.tone ?? "friendly",
           }))
         }
       } catch (parseError) {
         console.error("Failed to parse saved personalization settings", parseError)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    const storedModels = localStorage.getItem("radhika-provider-models")
+    if (storedModels) {
+      try {
+        const parsed = JSON.parse(storedModels) as Partial<ProviderModelMap>
+        setModelPreferences((prev) => ({
+          groq: parsed.groq || prev.groq,
+          gemini: parsed.gemini || prev.gemini,
+          openai: parsed.openai || prev.openai,
+          claude: parsed.claude || prev.claude,
+        }))
+      } catch (err) {
+        console.error("Failed to parse stored model preferences", err)
       }
     }
   }, [])
@@ -548,6 +1156,424 @@ export default function FuturisticRadhika() {
     stopSpeaking()
   }, [setMessages, clearSpeechError, stopSpeaking])
 
+  // Clear chat UI when user signs out elsewhere in the app
+  useEffect(() => {
+    const handler = () => {
+      try {
+        // Clear UI messages and any current chat attachment
+        clearChat()
+        if (typeof clearCurrentChat === "function") {
+          clearCurrentChat()
+        }
+        // Reset persistence/load tracking
+        hasLoadedRef.current = null
+        previousMessagesLengthRef.current = 0
+        persistedMessageIdsRef.current = new Set()
+      } catch (err) {
+        console.error("Failed to clear chat on sign out:", err)
+      }
+    }
+
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("radhika:signOut", handler)
+    }
+
+    return () => {
+      if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+        window.removeEventListener("radhika:signOut", handler)
+      }
+    }
+  }, [clearChat, clearCurrentChat])
+
+  // Refresh the list of all chats
+  const refreshChats = useCallback(async () => {
+    if (!persistenceEnabled) return
+    
+    console.log("🔄 Refreshing chat history...")
+    
+    try {
+      setIsLoadingAllChats(true)
+      
+      // LOCAL-FIRST: Immediately show local chats (no waiting)
+      const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+      console.log(`📚 Local chats (immediate): ${localChats.length}`)
+      setAllChats(localChats)
+      
+      // Then try to fetch and merge remote chats
+      if (getAllChats) {
+        // Set a safety timeout to ensure loading never hangs forever
+        const safetyTimeout = setTimeout(() => {
+          console.warn("⚠️ Remote fetch taking too long, stopping loading")
+          setIsLoadingAllChats(false)
+        }, 12000) // 12 seconds max
+        
+        try {
+          const mergedChats = await getAllChats()
+          clearTimeout(safetyTimeout)
+          
+          console.log(`✅ After remote merge: ${mergedChats?.length || 0} chats`)
+          setAllChats(mergedChats || localChats)
+        } catch (remoteErr) {
+          clearTimeout(safetyTimeout)
+          console.log("Remote fetch failed, keeping local chats:", remoteErr)
+          // Keep showing local chats - they're already set
+        }
+      }
+      
+      // Check if current chat was deleted
+      const finalChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+      if (currentChat && !finalChats?.find((c) => c.id === currentChat.id || c.localId === currentChat.localId)) {
+        // Current chat was deleted; detach and clear local messages
+        clearCurrentChat?.()
+        setMessages([])
+        messagesByModeRef.current[currentModeRef.current] = []
+        hasLoadedRef.current = null
+        previousMessagesLengthRef.current = 0
+        persistedMessageIdsRef.current = new Set()
+      }
+    } catch (err) {
+      console.error("Failed to refresh chats:", err)
+      // On error, try to at least show local chats
+      try {
+        const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+        setAllChats(localChats || [])
+      } catch {
+        setAllChats([])
+      }
+    } finally {
+      // Always clear loading state, even on error
+      setIsLoadingAllChats(false)
+    }
+  }, [persistenceEnabled, getAllChats, currentChat, clearCurrentChat, setMessages, mode, currentProfileId])
+
+  // Create a chat only after the first message is present
+  useEffect(() => {
+    if (!persistenceEnabled || currentChat || !createNewChat) return
+    if (messages.length === 0) return
+    if (isRestoringRef.current) return
+    if (isCreatingChatRef.current) return
+
+    console.log("🔄 Auto-creating chat session after first message...")
+    isCreatingChatRef.current = true
+
+    // Capture any local messages present so we can persist them after the chat is created.
+    const pendingMessages = messagesByModeRef.current[currentModeRef.current] ?? messages.slice()
+    
+    // IMPORTANT: Update previousMessagesLengthRef BEFORE async work starts
+    // This prevents the other useEffect from trying to persist the same messages
+    previousMessagesLengthRef.current = messages.length
+
+    ;(async () => {
+      try {
+        const newChat = await createNewChat()
+        if (newChat) {
+          // Mark as loaded to prevent immediate reload from clearing local messages
+          hasLoadedRef.current = newChat.id
+          // Don't clear persistedMessageIdsRef - preserve existing tracked IDs to prevent duplicates
+          
+          // IMMEDIATELY add new chat to allChats for sidebar visibility
+          setAllChats(prev => {
+            // Avoid duplicates
+            const exists = prev.some(c => c.id === newChat.id || (c as any).localId === (newChat as any).localId)
+            if (exists) return prev
+            return [newChat as Chat, ...prev]
+          })
+
+          try {
+            // Persist ALL pending messages (both user and assistant)
+            for (const msg of pendingMessages) {
+              if (!msg || !msg.id) continue
+              if (persistedMessageIdsRef.current.has(msg.id)) continue
+
+              const normalized = normalizeContentForStorage(msg.content)
+              if (!normalized || !normalized.trim()) continue
+              try {
+                // Save to localStorage first - syncs to Supabase in background
+                const chatId = newChat.localId || newChat.id
+                console.log(`📝 Persisting ${msg.role} message to new chat:`, msg.id, "->", chatId)
+                localChatStorage.addMessage(
+                  chatId,
+                  msg.role as "user" | "assistant" | "system",
+                  normalized,
+                  msg.metadata,
+                  msg.id
+                )
+                persistedMessageIdsRef.current.add(msg.id)
+              } catch (err) {
+                console.error("Failed to persist pending message during auto-create:", err)
+              }
+            }
+          } catch (err) {
+            console.error("Error while persisting pending messages after auto-create:", err)
+          }
+
+          console.log("✅ Auto-created chat session:", newChat.id, "with", pendingMessages.length, "messages")
+          // No need for refreshChats here - we already added it to allChats
+        }
+      } catch (err) {
+        console.error("❌ Failed to auto-create chat after first message:", err)
+      } finally {
+        isCreatingChatRef.current = false
+      }
+    })()
+  }, [messages.length, persistenceEnabled, currentChat, createNewChat])
+
+  // Create a new chat session
+  const handleNewChat = useCallback(async () => {
+    // Clear current messages
+    setMessages([])
+    messagesByModeRef.current[currentModeRef.current] = []
+    setError(null)
+    clearSpeechError()
+    stopSpeaking()
+    
+    // Reset the load flag so new chat will load fresh
+    hasLoadedRef.current = null
+    previousMessagesLengthRef.current = 0
+    persistedMessageIdsRef.current = new Set()
+    // Detach from any current chat; a new chat will be created when the first message is sent
+    if (clearCurrentChat) {
+      clearCurrentChat()
+    }
+  }, [setMessages, setError, clearSpeechError, stopSpeaking, clearCurrentChat])
+
+  // Load a specific chat
+  const handleSelectChat = useCallback(async (chatId: string) => {
+    if (!persistenceEnabled || !loadChat) return
+
+    try {
+      // Reset the load flag for the new chat
+      hasLoadedRef.current = null
+      persistedMessageIdsRef.current = new Set()
+      
+      // Clear current messages first
+      setMessages([])
+      messagesByModeRef.current[currentModeRef.current] = []
+      previousMessagesLengthRef.current = 0
+      
+      // Load the chat (this will trigger the useEffect to load messages)
+      const chat = await loadChat(chatId)
+      const targetMode = chat?.mode ? (chat.mode as Mode) : mode
+      if (chat && chat.mode && chat.mode !== mode) {
+        setMode(targetMode)
+      }
+
+      // Eagerly load messages to ensure they render immediately
+      if (chat) {
+        const savedMessages = await loadPersistedMessages(chat.id)
+        const formattedMessages = savedMessages.map((msg) => ({
+          id: msg.id,
+          role: msg.role as "user" | "assistant" | "system",
+          content: msg.content,
+          createdAt: msg.createdAt ? new Date(msg.createdAt as string) : undefined,
+          isFavorite: msg.isFavorite,
+        }))
+        setMessages(formattedMessages)
+        messagesByModeRef.current[targetMode] = formattedMessages
+        hasLoadedRef.current = chat.id
+        previousMessagesLengthRef.current = formattedMessages.length
+      }
+      
+      // Close the history drawer
+      setChatHistoryOpen(false)
+    } catch (err) {
+      console.error("Failed to load chat:", err)
+    }
+  }, [persistenceEnabled, loadChat, loadPersistedMessages, setMessages, mode, setMode])
+
+  // Handle chat profile selection
+  const handleProfileSelect = useCallback((profileId: string | null) => {
+    setCurrentProfileId(profileId)
+    // TODO: Optionally create a new chat with the selected profile
+    // or filter chat history by profile
+  }, [])
+
+  // Handle URL parameters for mode, chatId, and profileId on mount
+  useEffect(() => {
+    if (typeof window === "undefined" || !isMounted) return
+    
+    const params = new URLSearchParams(window.location.search)
+    const modeParam = params.get("mode")
+    const chatIdParam = params.get("chatId")
+    const profileIdParam = params.get("profileId")
+    
+    // Set mode if provided in URL
+    if (modeParam && modeParam in MODES) {
+      setMode(modeParam as Mode)
+    }
+    
+    // Load chat if chatId is provided
+    if (chatIdParam) {
+      handleSelectChat(chatIdParam)
+    }
+    
+    // Set profile if profileId is provided
+    if (profileIdParam) {
+      setCurrentProfileId(profileIdParam)
+    }
+  }, [isMounted, handleSelectChat])
+
+  // Handle chat deletion - LOCAL-FIRST: Delete from localStorage immediately
+  const handleDeleteChat = useCallback(async (chatId: string) => {
+    console.log("🗑️ Deleting chat:", chatId)
+    
+    // If deleting current chat, clear it
+    if (currentChat?.id === chatId || currentChat?.localId === chatId) {
+      clearCurrentChat()
+      setMessages([])
+      messagesByModeRef.current[mode] = []
+      hasLoadedRef.current = null
+      previousMessagesLengthRef.current = 0
+      persistedMessageIdsRef.current = new Set()
+    }
+    
+    // LOCAL-FIRST: Delete from localStorage IMMEDIATELY (no waiting for server)
+    const deleted = localChatStorage.deleteChat(chatId)
+    console.log("🗑️ Deleted from localStorage:", deleted)
+    
+    // Optimistically remove from local list
+    setAllChats((prev) => prev.filter((c: any) => c.id !== chatId && c.localId !== chatId))
+    
+    // Background: Try to delete from server (don't wait, don't block)
+    // The cron job will clean up orphaned data anyway
+    chatService.deleteChat(chatId).catch(err => {
+      console.log("Background server delete failed (OK, cron will clean up):", err?.message)
+    })
+  }, [currentChat, mode, clearCurrentChat, setMessages])
+
+  // Handle deleting all chats
+  const handleDeleteAllChats = useCallback(async () => {
+    // Clear current chat and messages
+    clearCurrentChat()
+    setMessages([])
+    for (const modeKey of Object.keys(messagesByModeRef.current) as Mode[]) {
+      messagesByModeRef.current[modeKey] = []
+    }
+    hasLoadedRef.current = null
+    previousMessagesLengthRef.current = 0
+    persistedMessageIdsRef.current = new Set()
+    // Clear local list immediately
+    setAllChats([])
+    // deleteAllLocalChats is already called by the sidebar
+  }, [clearCurrentChat, setMessages])
+
+  const handleRenameChat = useCallback(async (chatId: string, title: string) => {
+    if (!persistenceEnabled) return
+    try {
+      try {
+        const existing = await chatService.getChatById(chatId)
+        console.log("Renaming chat - fetched existing:", existing)
+      } catch (fetchErr) {
+        console.warn("Could not fetch existing chat before rename:", fetchErr)
+      }
+
+      const updated = await chatService.updateChat(chatId, { title })
+      console.log("Chat renamed on server:", updated)
+
+      // Optimistically update local list
+      setAllChats((prev) => prev.map((c) => (c.id === chatId ? { ...c, title: updated.title } : c)))
+      // Notify user of success
+      try {
+        toast({ title: "Chat renamed", description: `Renamed to '${updated.title}'` })
+      } catch {}
+      // If the current chat was renamed, also update currentChat state so UI persists without reload
+      try {
+        if (currentChat?.id === chatId) {
+          // @ts-ignore
+          if (typeof setCurrentChat === 'function') {
+            // @ts-ignore
+            setCurrentChat((prev: any) => prev ? { ...prev, title: updated.title } : prev)
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    } catch (err) {
+      console.error("Failed to rename chat", err)
+      try {
+        const message = err && (err as any).message ? (err as any).message : String(err)
+        toast({ title: "Rename failed", description: message })
+      } catch {}
+    }
+  }, [persistenceEnabled])
+
+  const handleFavoriteChange = useCallback((messageId: string, isFavorite: boolean) => {
+    // Update local UI state immediately
+    setMessages((prev: any[]) => {
+      const next = prev.map((msg: any) => msg.id === messageId ? { ...msg, isFavorite } : msg)
+      messagesByModeRef.current[currentModeRef.current] = next
+      return next
+    })
+    
+    // Update message in localChatStorage
+    localChatStorage.updateMessage(messageId, { isFavorite })
+    
+    // LOCAL-FIRST: Update local favorites storage
+    if (isFavorite) {
+      // Find the message to add to favorites
+      const message = messages.find((msg: any) => msg.id === messageId)
+      if (message) {
+        const localMessage = localChatStorage.getMessage(messageId)
+        const currentChatId = currentChatRef.current?.id || currentChatRef.current?.localId
+        const currentChatTitle = currentChatRef.current?.title
+        localFavoritesStorage.addFavorite({
+          messageId: messageId,
+          remoteMessageId: localMessage?.remoteId,
+          chatId: currentChatId || '',
+          remoteChatId: localMessage?.remoteChatId,
+          content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+          role: message.role as 'user' | 'assistant' | 'system',
+          mode: currentModeRef.current,
+          chatTitle: currentChatTitle || `${MODES[currentModeRef.current]?.label || 'General'} Chat`,
+          createdAt: message.createdAt || new Date().toISOString(),
+        })
+      }
+    } else {
+      // Remove from favorites
+      localFavoritesStorage.removeFavorite(messageId)
+    }
+  }, [messages])
+
+  // Load all chats when mode changes or user becomes authenticated
+  // LOCAL-FIRST: Show local chats immediately, then fetch remote in background
+  useEffect(() => {
+    if (persistenceEnabled) {
+      // IMMEDIATELY show local chats (no waiting)
+      const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+      console.log(`📚 Immediate local chats: ${localChats.length}`)
+      setAllChats(localChats)
+      
+      // Then fetch remote in background (don't block UI)
+      setIsLoadingAllChats(true)
+      refreshChats()
+        .catch(err => {
+          console.log("Background chat refresh failed (this is OK):", err?.message)
+        })
+        .finally(() => {
+          setIsLoadingAllChats(false)
+        })
+    } else {
+      // Clear chats and loading state when not authenticated
+      setAllChats([])
+      setIsLoadingAllChats(false)
+    }
+  }, [persistenceEnabled, mode, currentProfileId])
+
+  // Refresh chats when page becomes visible (e.g., navigating back from favorites)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && persistenceEnabled) {
+        // Reload local chats immediately when returning to the page
+        const localChats = localChatStorage.getChats(mode, currentProfileId || undefined)
+        console.log(`👁️ Page visible - refreshing chats: ${localChats.length}`)
+        setAllChats(localChats)
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [persistenceEnabled, mode, currentProfileId])
+
   const handleVoiceInput = useCallback(() => {
     startListening((transcript: string) => {
       setInput(transcript)
@@ -556,6 +1582,10 @@ export default function FuturisticRadhika() {
 
   const handleModeChange = useCallback(
     (nextMode: Mode) => {
+      if (!canUseMode(nextMode)) {
+        setNavigationOpen(false)
+        return
+      }
       if (nextMode === mode) return
       messagesByModeRef.current[currentModeRef.current] = [...messages]
       setMode(nextMode)
@@ -565,33 +1595,55 @@ export default function FuturisticRadhika() {
       const nextMessages = messagesByModeRef.current[nextMode] || []
       setMessages(nextMessages)
     },
-    [mode, messages, setMessages, clearSpeechError],
+    [canUseMode, mode, messages, setMessages, clearSpeechError],
   )
 
   const handleProviderChange = useCallback(
     (nextProvider: Provider) => {
-      if (PROVIDERS[nextProvider].requiresApiKey) {
-        const hasKey =
-          nextProvider === "openai"
-            ? Boolean(apiKeys.openai)
-            : nextProvider === "claude"
-              ? Boolean(apiKeys.claude)
-              : true
-
-        if (!hasKey) {
-          setSelectedProvider(nextProvider)
-          setTempApiKey("")
-          setIsApiKeyDialogOpen(true)
-          return
-        }
+      if (PROVIDERS[nextProvider].requiresApiKey && !apiKeys[nextProvider]) {
+        setSelectedProvider(nextProvider as KeyProvider)
+        setTempApiKey("")
+        setIsApiKeyDialogOpen(true)
+        return
       }
 
       setProvider(nextProvider)
+      // Persist selected provider for authenticated users so it's remembered across refreshes
+      try {
+        if (isAuthenticated && user && typeof window !== "undefined") {
+          const key = `radhika-selected-provider:${user.id}`
+          localStorage.setItem(key, nextProvider)
+        }
+      } catch (err) {
+        // Non-fatal - ignore storage errors
+        console.error("Failed to persist selected provider:", err)
+      }
+      // Reset to provider default model unless a custom is already set for that provider
+      setModelPreferences((prev) => ({
+        ...prev,
+        [nextProvider]: prev[nextProvider] || PROVIDERS[nextProvider].models[0],
+      }))
       setError(null)
       clearSpeechError()
     },
     [apiKeys, clearSpeechError],
   )
+
+  // Load persisted provider preference for authenticated users (per-user key)
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!isAuthenticated || !user) return
+
+    try {
+      const key = `radhika-selected-provider:${user.id}`
+      const saved = localStorage.getItem(key)
+      if (saved && Object.prototype.hasOwnProperty.call(PROVIDERS, saved)) {
+        setProvider(saved as Provider)
+      }
+    } catch (err) {
+      console.error("Failed to load persisted provider preference:", err)
+    }
+  }, [isAuthenticated, user])
 
   const handleSaveApiKey = useCallback(() => {
     if (!tempApiKey.trim()) {
@@ -599,7 +1651,13 @@ export default function FuturisticRadhika() {
       return
     }
 
-    if (selectedProvider !== "openai" && selectedProvider !== "claude" && selectedProvider !== "huggingface") {
+    if (
+      selectedProvider !== "openai" &&
+      selectedProvider !== "claude" &&
+      selectedProvider !== "huggingface" &&
+      selectedProvider !== "groq" &&
+      selectedProvider !== "gemini"
+    ) {
       setIsApiKeyDialogOpen(false)
       return
     }
@@ -612,8 +1670,8 @@ export default function FuturisticRadhika() {
     setApiKeys(updatedKeys)
     localStorage.setItem("radhika-api-keys", JSON.stringify(updatedKeys))
 
-    if (selectedProvider === "openai" || selectedProvider === "claude") {
-      setProvider(selectedProvider)
+    if (selectedProvider === "openai" || selectedProvider === "claude" || selectedProvider === "groq" || selectedProvider === "gemini") {
+      setProvider(selectedProvider as Provider)
     }
     setError(null)
     clearSpeechError()
@@ -622,7 +1680,13 @@ export default function FuturisticRadhika() {
   }, [apiKeys, selectedProvider, tempApiKey, clearSpeechError])
 
   const handleRemoveApiKey = useCallback(() => {
-    if (selectedProvider !== "openai" && selectedProvider !== "claude" && selectedProvider !== "huggingface") {
+    if (
+      selectedProvider !== "openai" &&
+      selectedProvider !== "claude" &&
+      selectedProvider !== "huggingface" &&
+      selectedProvider !== "groq" &&
+      selectedProvider !== "gemini"
+    ) {
       setIsApiKeyDialogOpen(false)
       return
     }
@@ -653,15 +1717,12 @@ export default function FuturisticRadhika() {
     }
   }, [])
 
-  const handleOpenSettings = useCallback(() => {
-    setIsSettingsDialogOpen(true)
-  }, [])
-
-  const handleManageProvider = useCallback((providerKey: KeyProvider) => {
-    setSelectedProvider(providerKey)
-    setTempApiKey("")
+  const handleOpenApiKeyDialog = useCallback((p: KeyProvider = "openai") => {
+    setSelectedProvider(p)
+    setTempApiKey(apiKeys[p] ?? "")
     setIsApiKeyDialogOpen(true)
-  }, [])
+    setError(null)
+  }, [apiKeys])
 
   const promptForProviderKey = useCallback(
     (providerId: ImageProviderId) => {
@@ -741,9 +1802,17 @@ export default function FuturisticRadhika() {
         return
       }
 
+      // For guests, prompt for API key if provider requires one
+      if (PROVIDERS[provider].requiresApiKey && !apiKeys[provider]) {
+        setSelectedProvider(provider as KeyProvider)
+        setTempApiKey("")
+        setIsApiKeyDialogOpen(true)
+        return
+      }
+
       // Prevent duplicate submissions
-      if (isChatLoading || isGeneratingImage) {
-        console.log('Already processing, skipping duplicate submission')
+      if (isChatLoading || isGeneratingImageRef.current) {
+        console.log("Already processing, skipping duplicate submission")
         return
       }
 
@@ -841,6 +1910,7 @@ export default function FuturisticRadhika() {
           ? apiKeys.huggingface
           : ""
 
+      isGeneratingImageRef.current = true
       setIsGeneratingImage(true)
       setMessages((prev: any) => [
         ...prev,
@@ -865,6 +1935,7 @@ export default function FuturisticRadhika() {
               : message,
           ),
         )
+        isGeneratingImageRef.current = false
         setIsGeneratingImage(false)
         return
       }
@@ -906,9 +1977,15 @@ export default function FuturisticRadhika() {
       }
 
       try {
+        // Cancel any previous in-flight image request before starting a new one
+        imageAbortControllerRef.current?.abort()
+        const abortController = new AbortController()
+        imageAbortControllerRef.current = abortController
+
         const response = await fetch("/api/image", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: abortController.signal,
           body: JSON.stringify(requestBody),
         })
 
@@ -920,19 +1997,65 @@ export default function FuturisticRadhika() {
 
         const markdown = `![Generated image](${data.imageUrl})\n\n*${data.provider} · ${data.model} · ${data.size}*\n\n**Prompt:** ${data.prompt}`
 
+        // Update the message in UI first
         setMessages((prev: any) =>
           prev.map((message: any) => (message.id === placeholderId ? { ...message, content: markdown } : message)),
         )
+        
+        // Persist the image message to localStorage AFTER updating the content
+        const currentPersistenceEnabled = persistenceEnabledRef.current
+        const chatToUse = currentChatRef.current
+        
+        if (currentPersistenceEnabled && chatToUse && placeholderId) {
+          const chatId = chatToUse.localId || chatToUse.id
+          
+          // Check if this message was already persisted with the placeholder content
+          const wasAlreadyPersisted = persistedMessageIdsRef.current.has(placeholderId)
+          
+          console.log(`💾 Persisting/updating image message: ${placeholderId} 📸 to chat: ${chatId}`, {
+            wasAlreadyPersisted,
+            markdown: markdown.substring(0, 50) + '...'
+          })
+          
+          try {
+            // Always save/update with the final markdown content
+            // This will overwrite any "Generating image..." placeholder that was saved
+            localChatStorage.addMessage(
+              chatId,
+              "assistant",
+              markdown,
+              undefined,
+              placeholderId
+            )
+            persistedMessageIdsRef.current.add(placeholderId)
+            console.log("✅ Image message persisted/updated to localStorage successfully")
+          } catch (err) {
+            console.error("❌ Failed to persist image message:", err)
+          }
+        } else {
+          console.log("⚠️ Skipping image persistence:", {
+            persistenceEnabled: currentPersistenceEnabled,
+            hasChat: !!chatToUse,
+            chatId: chatToUse?.id,
+            placeholderId
+          })
+        }
       } catch (error) {
+        const isAbort = (error instanceof DOMException && error.name === "AbortError") ||
+          (error instanceof Error && /abort/i.test(error.message))
         const message = error instanceof Error ? error.message : "Image generation failed"
         setMessages((prev: any) =>
           prev.map((entry: any) =>
             entry.id === placeholderId
-              ? { ...entry, content: `Image generation failed: ${message}` }
+              ? isAbort
+                ? { ...entry, content: "_Image generation cancelled._" }
+                : { ...entry, content: `Image generation failed: ${message}` }
               : entry,
           ),
         )
       } finally {
+        imageAbortControllerRef.current = null
+        isGeneratingImageRef.current = false
         setIsGeneratingImage(false)
       }
     },
@@ -953,6 +2076,10 @@ export default function FuturisticRadhika() {
     ],
   )
 
+  useEffect(() => {
+    handleComposerSubmitRef.current = handleComposerSubmit
+  }, [handleComposerSubmit])
+
   // Helper function to send chat message and handle streaming
   const sendChatMessage = useCallback(async (userMessage: any) => {
     // Prevent duplicate submissions
@@ -962,6 +2089,11 @@ export default function FuturisticRadhika() {
     }
     
     setIsChatLoading(true)
+
+    // Cancel any previous in-flight request
+    chatAbortControllerRef.current?.abort()
+    const abortController = new AbortController()
+    chatAbortControllerRef.current = abortController
     
     // Get current messages including the new user message
     let currentMessages: any[] = []
@@ -988,10 +2120,14 @@ export default function FuturisticRadhika() {
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: abortController.signal,
           body: JSON.stringify({
             messages: currentMessages,
             mode,
             provider,
+            userGender: userPersonalization.gender,
+            userAge: userPersonalization.age,
+            conversationTone: mode === "bff" ? undefined : userPersonalization.tone,
             ...(currentApiKey ? { apiKey: currentApiKey } : {}),
           }),
         })
@@ -1002,7 +2138,7 @@ export default function FuturisticRadhika() {
         }
 
         // Read the streaming response - AI SDK uses text/plain streaming
-        const reader = response.body?.getReader()
+  const reader = response.body?.getReader()
         const decoder = new TextDecoder()
         
         if (!reader) {
@@ -1038,6 +2174,12 @@ export default function FuturisticRadhika() {
           }
         } catch (streamError) {
           console.error('❌ Stream error:', streamError)
+          // Cancel reader on stream error
+          try {
+            await reader.cancel()
+          } catch {
+            // ignore
+          }
           // Remove empty assistant message on stream error
           setMessages((prev: any) => prev.filter((msg: any) => msg.id !== assistantMessageId))
           throw streamError
@@ -1056,6 +2198,8 @@ export default function FuturisticRadhika() {
         }
     } catch (error) {
       console.error('❌ Chat error:', error)
+      const isAbort = (error instanceof DOMException && error.name === 'AbortError') ||
+        (error instanceof Error && /abort/i.test(error.message))
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       
       // Add error message only if we don't already have an empty assistant message
@@ -1064,6 +2208,10 @@ export default function FuturisticRadhika() {
         if (hasEmptyAssistant) {
           // Remove the empty assistant message
           return prev.filter((msg: any) => msg.id !== assistantMessageId)
+        }
+        if (isAbort) {
+          // User cancelled. Don't add error noise.
+          return prev
         }
         return [
           ...prev,
@@ -1076,6 +2224,7 @@ export default function FuturisticRadhika() {
       })
     } finally {
       setIsChatLoading(false)
+      chatAbortControllerRef.current = null
     }
   }, [mode, provider, currentApiKey, setMessages, speakMessage])
 
@@ -1157,9 +2306,14 @@ export default function FuturisticRadhika() {
           }
           
           try {
+            imageAbortControllerRef.current?.abort()
+            const abortController = new AbortController()
+            imageAbortControllerRef.current = abortController
+
             const response = await fetch("/api/image", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
+              signal: abortController.signal,
               body: JSON.stringify(requestBody),
             })
             
@@ -1175,15 +2329,18 @@ export default function FuturisticRadhika() {
               current.map((msg: any) => (msg.id === messageId ? { ...msg, content: markdown } : msg))
             )
           } catch (error) {
+            const isAbort = (error instanceof DOMException && error.name === "AbortError") ||
+              (error instanceof Error && /abort/i.test(error.message))
             const errorMessage = error instanceof Error ? error.message : "Image generation failed"
             setMessages((current: any) =>
               current.map((msg: any) =>
                 msg.id === messageId
-                  ? { ...msg, content: `Image generation failed: ${errorMessage}` }
+                  ? { ...msg, content: isAbort ? "_Image generation cancelled._" : `Image generation failed: ${errorMessage}` }
                   : msg
               )
             )
           } finally {
+            imageAbortControllerRef.current = null
             setIsGeneratingImage(false)
           }
         })()
@@ -1300,6 +2457,17 @@ export default function FuturisticRadhika() {
     [uiStyle],
   )
 
+  const availableModes = (Object.keys(MODES) as Mode[]).filter((modeKey) => canUseMode(modeKey))
+  const allowedModes = availableModes.length ? availableModes : (["general"] as Mode[])
+  const personalizationEnabled = isAuthenticated && canUsePersonalization
+  const modeUpgradeCta = !isAuthenticated
+    ? {
+        label: "Sign up to unlock more modes",
+        href: "/auth/signup",
+        description: "Create a free account to access Productivity, Wellness, Learning, Creative, and BFF modes.",
+      }
+    : undefined
+
   const modeCounts: Record<Mode, number> = {
     general: messagesByModeRef.current.general.length,
     productivity: messagesByModeRef.current.productivity.length,
@@ -1308,6 +2476,16 @@ export default function FuturisticRadhika() {
     creative: messagesByModeRef.current.creative.length,
     bff: messagesByModeRef.current.bff.length,
   }
+  const activityMessages = messagesByModeRef.current[mode] ?? []
+
+  // Show the insights panel for guests by default. For authenticated users the panel
+  // is collapsible and follows `isInsightsCollapsed`. For guests it's always visible
+  // and not collapsible.
+  const insightsPanel = (!isAuthenticated || !isInsightsCollapsed) ? (
+    <InsightsPanel uiStyle={uiStyle} collapsible={isAuthenticated} onCollapse={() => isAuthenticated && setIsInsightsCollapsed(true)}>
+  <ActivityMatrix key={String(isAuthenticated)} messages={activityMessages} currentMode={mode} uiStyle={uiStyle} isAuthenticated={isAuthenticated} />
+    </InsightsPanel>
+  ) : null
 
   const providerApiKeySet = {
     groq: true,
@@ -1328,16 +2506,33 @@ export default function FuturisticRadhika() {
           modeCounts={modeCounts}
           uiStyle={uiStyle}
           onDismiss={() => setNavigationOpen(false)}
-          onOpenSettings={handleOpenSettings}
-          onOpenPersonalization={() => setIsPersonalizationDialogOpen(true)}
+          isAuthenticated={isAuthenticated}
+          onOpenApiKeys={handleOpenApiKeyDialog}
+          apiKeyProvider={provider as KeyProvider}
+          onOpenPersonalization={undefined}
+          showHistoryToggle={isAuthenticated}
+          historyOpen={chatHistoryOpen}
+          onToggleHistory={() => setChatHistoryOpen(prev => !prev)}
+          showHeatmapToggle={isAuthenticated}
+          heatmapOpen={!isInsightsCollapsed}
+          onToggleHeatmap={() => {
+            if (!isAuthenticated) return
+            setIsInsightsCollapsed((prev) => !prev)
+          }}
           userPersonalization={userPersonalization}
           showCloseButton
           showQuickActions={false}
+          allowedModes={allowedModes}
+          modeCta={modeUpgradeCta}
+          onNewChat={isAuthenticated ? handleNewChat : undefined}
         />
       </SidebarDrawer>
 
       <ChatAppShell
         isPixel={uiStyle === "pixel"}
+  // When insightsPanel is present reserve the right column; if it's collapsed the
+  // chat section will grow to use the freed space.
+  hasInsights={Boolean(insightsPanel)}
         sidebar={
           <SidebarNav
             mode={mode}
@@ -1347,9 +2542,23 @@ export default function FuturisticRadhika() {
             onQuickAction={handleQuickAction}
             modeCounts={modeCounts}
             uiStyle={uiStyle}
-            onOpenSettings={handleOpenSettings}
-            onOpenPersonalization={() => setIsPersonalizationDialogOpen(true)}
+            isAuthenticated={isAuthenticated}
+            onOpenApiKeys={handleOpenApiKeyDialog}
+            apiKeyProvider={provider as KeyProvider}
+            onOpenPersonalization={undefined}
+            showHistoryToggle={isAuthenticated}
+            historyOpen={chatHistoryOpen}
+            onToggleHistory={() => setChatHistoryOpen(prev => !prev)}
+            showHeatmapToggle={isAuthenticated}
+            heatmapOpen={!isInsightsCollapsed}
+            onToggleHeatmap={() => {
+              if (!isAuthenticated) return
+              setIsInsightsCollapsed((prev) => !prev)
+            }}
             userPersonalization={userPersonalization}
+            allowedModes={allowedModes}
+            modeCta={modeUpgradeCta}
+            onNewChat={isAuthenticated ? handleNewChat : undefined}
           />
         }
         topbar={
@@ -1358,27 +2567,40 @@ export default function FuturisticRadhika() {
             modeMeta={currentMode}
             uiStyle={uiStyle}
             onToggleUI={() => setUIStyle(uiStyle === "modern" ? "pixel" : "modern")}
-            darkMode={darkMode}
-            onToggleTheme={() => setDarkMode((prev) => !prev)}
+            darkMode={Boolean(isMounted && theme === "dark")}
+            onToggleTheme={() => {
+              // Guard theme toggle until mounted to avoid SSR/client mismatch
+              if (!isMounted) return
+              setTheme(theme === "dark" ? "light" : "dark")
+            }}
             messageCount={messages.length}
             voiceEnabled={voiceEnabled}
             onToggleVoice={() => setVoiceEnabled(!voiceEnabled)}
+            showVoiceToggle={voiceAllowed}
             onClearChat={clearChat}
             onOpenSidebar={() => setNavigationOpen(true)}
+            onOpenHeatmap={() => {
+              if (!isAuthenticated) return
+              setIsInsightsCollapsed(false)
+            }}
             providerLabel={providerLabel}
             error={combinedError ?? null}
             onDismissError={() => {
               setError(null)
               clearSpeechError()
             }}
+            onExportChat={() => setIsExportDialogOpen(true)}
+            userMenu={<UserMenu />}
+            heatmapAvailable={isAuthenticated}
+            currentProfileId={currentProfileId}
+            onProfileSelect={handleProfileSelect}
+            pendingQueueCount={pendingQueueCount}
+            onSyncQueue={syncQueue}
           />
         }
-        insights={
-          <InsightsPanel uiStyle={uiStyle}>
-            <ActivityMatrix messages={messages} currentMode={mode} uiStyle={uiStyle} />
-          </InsightsPanel>
-        }
+        insights={insightsPanel}
       >
+        {/* Removed collapsed banner — insights column is always reserved on the right. */}
         <ChatFeed
           messages={messages as any}
           currentMode={currentMode}
@@ -1396,11 +2618,12 @@ export default function FuturisticRadhika() {
           currentSpeakingMessageId={currentMessageId}
           onSpeakMessage={speakMessage}
           onStopSpeaking={stopSpeaking}
+          onFavoriteChange={handleFavoriteChange}
         />
         <ChatComposer
           input={input}
           onInputChange={handleInputChange}
-          onSubmit={handleComposerSubmit}
+          onSubmit={handleSubmit}
           placeholder={currentMode.placeholder}
           isLoading={isLoading}
           isListening={isListening}
@@ -1438,15 +2661,6 @@ export default function FuturisticRadhika() {
         onRequestProviderKey={promptForProviderKey}
       />
 
-      <SettingsDialog
-        open={isSettingsDialogOpen}
-        onOpenChange={setIsSettingsDialogOpen}
-        apiKeys={apiKeys}
-        providers={PROVIDERS}
-        onManageProvider={handleManageProvider}
-        uiStyle={uiStyle}
-      />
-
       <ApiKeyDialog
         open={isApiKeyDialogOpen}
         onOpenChange={handleApiDialogChange}
@@ -1461,19 +2675,51 @@ export default function FuturisticRadhika() {
             ? Boolean(apiKeys.openai)
             : selectedProvider === "claude"
               ? Boolean(apiKeys.claude)
-              : selectedProvider === "huggingface"
-                ? Boolean(apiKeys.huggingface)
-                : false
+              : selectedProvider === "groq"
+                ? Boolean(apiKeys.groq)
+                : selectedProvider === "gemini"
+                  ? Boolean(apiKeys.gemini)
+                  : selectedProvider === "huggingface"
+                    ? Boolean(apiKeys.huggingface)
+                    : false
         }
         uiStyle={uiStyle}
       />
 
-      <PersonalizationDialog
-        open={isPersonalizationDialogOpen}
-        onOpenChange={setIsPersonalizationDialogOpen}
-        personalization={userPersonalization}
-        onSave={setUserPersonalization}
-        uiStyle={uiStyle}
+  {/* Personalization dialog moved to Settings page */}
+
+      {/* Chat History Sidebar */}
+      <SidebarDrawer 
+        open={chatHistoryOpen} 
+        onOpenChange={setChatHistoryOpen} 
+        isPixel={uiStyle === "pixel"}
+        side="right"
+      >
+        <ChatHistorySidebar
+          chats={allChats}
+          currentChatId={currentChat?.id}
+          onSelectChat={handleSelectChat}
+          onDeleteChat={handleDeleteChat}
+          onDeleteAllChats={handleDeleteAllChats}
+          onRenameChat={handleRenameChat}
+          onRefresh={refreshChats}
+          isLoading={isLoadingAllChats}
+        />
+      </SidebarDrawer>
+
+      <ExportDialog
+        open={isExportDialogOpen}
+        onOpenChange={setIsExportDialogOpen}
+        messages={messages.map((msg: any) => ({
+          id: msg.id || `${Date.now()}-${Math.random()}`,
+          chat_id: currentChat?.id || "",
+          role: msg.role,
+          content: msg.content,
+          metadata: null,
+          created_at: msg.createdAt || new Date().toISOString(),
+          is_favorite: false,
+        }))}
+        chatTitle={`${currentMode.label} Chat`}
       />
 
       <Analytics />

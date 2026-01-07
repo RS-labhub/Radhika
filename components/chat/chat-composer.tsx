@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/contexts/auth-context"
 import type { Provider, ProviderDefinition, UIStyle } from "@/types/chat"
 import { ArrowUp, Check, ChevronDown, Image, Key, Loader2, Mic, MicOff, Settings2, Sparkles, VolumeX } from "lucide-react"
 import type { FormEvent, KeyboardEvent, ChangeEvent } from "react"
@@ -61,6 +62,7 @@ export function ChatComposer({
   isGeneratingImage,
 }: ChatComposerProps) {
   const isPixel = uiStyle === "pixel"
+  const { isAuthenticated } = useAuth()
 
   const gradientByColor: Record<string, string> = {
     pink: "from-pink-500 to-rose-500",
@@ -148,30 +150,32 @@ export function ChatComposer({
                   {imageGenerationEnabled ? "Disable image generation" : "Enable image generation"}
                 </TooltipContent>
               </Tooltip>
-              <Tooltip delayDuration={100}>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={onOpenImageSettings}
-                    disabled={!imageGenerationEnabled}
-                    aria-label="Configure image generation"
-                    className={cn(
-                      "h-10 w-10 rounded-2xl border",
-                      isPixel
-                        ? "pixel-border pixel-shadow border-slate-500/80 bg-slate-200 text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                        : "border-white/40 bg-white/70 text-slate-600 backdrop-blur hover:bg-white/80 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-200",
-                      !imageGenerationEnabled && "opacity-50",
-                    )}
-                  >
-                    <Settings2 className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="text-xs max-w-xs text-center">
-                  {imageSettingsLabel || "Configure image generation"}
-                </TooltipContent>
-              </Tooltip>
+              {isAuthenticated ? (
+                <Tooltip delayDuration={100}>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={onOpenImageSettings}
+                      disabled={!imageGenerationEnabled}
+                      aria-label="Configure image generation"
+                      className={cn(
+                        "h-10 w-10 rounded-2xl border",
+                        isPixel
+                          ? "pixel-border pixel-shadow border-slate-500/80 bg-slate-200 text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                          : "border-white/40 bg-white/70 text-slate-600 backdrop-blur hover:bg-white/80 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-200",
+                        !imageGenerationEnabled && "opacity-50",
+                      )}
+                    >
+                      <Settings2 className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="text-xs max-w-xs text-center">
+                    {imageSettingsLabel || "Configure image generation"}
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
             </TooltipProvider>
             {isSpeaking ? (
               <Button
@@ -265,19 +269,40 @@ export function ChatComposer({
                 })}
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button
-              type="submit"
-              disabled={isLoading || isGeneratingImage || !input || input.trim().length === 0}
-              className={cn(
-                "flex h-10 w-10 items-center justify-center rounded-2xl border text-white transition-opacity",
-                isPixel
-                  ? cn("pixel-border pixel-shadow", pixelBgByColor[providers[provider].color] ?? "border-cyan-400 bg-cyan-600")
-                  : cn("bg-gradient-to-r", gradientByColor[providers[provider].color] ?? "from-cyan-500 to-blue-600", "border-none shadow-lg hover:opacity-90"),
-                (isLoading || isGeneratingImage || !input || input.trim().length === 0) && "opacity-50",
-              )}
-            >
-              {isLoading || isGeneratingImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
-            </Button>
+            {isLoading || isGeneratingImage ? (
+              <Button
+                type="submit"
+                className={cn(
+                  "flex h-10 items-center justify-center rounded-2xl border px-4 text-sm font-medium text-white",
+                  isPixel
+                    ? "pixel-border pixel-shadow border-rose-400 bg-rose-600 hover:bg-rose-700"
+                    : "border-none bg-rose-600 shadow-lg hover:bg-rose-700",
+                )}
+              >
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                disabled={isGeneratingImage || !input || input.trim().length === 0}
+                className={cn(
+                  "flex h-10 w-10 items-center justify-center rounded-2xl border text-white transition-opacity",
+                  isPixel
+                    ? cn(
+                        "pixel-border pixel-shadow",
+                        pixelBgByColor[providers[provider].color] ?? "border-cyan-400 bg-cyan-600",
+                      )
+                    : cn(
+                        "bg-gradient-to-r",
+                        gradientByColor[providers[provider].color] ?? "from-cyan-500 to-blue-600",
+                        "border-none shadow-lg hover:opacity-90",
+                      ),
+                  (isGeneratingImage || !input || input.trim().length === 0) && "opacity-50",
+                )}
+              >
+                {isGeneratingImage ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+              </Button>
+            )}
           </div>
         </div>
       </form>

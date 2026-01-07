@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>You have been invited - Radhika</title>
+  </head>
+  <body
+    style="
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+        'Helvetica Neue', Arial, sans-serif;
+      background-color: #f0f4f8;
+      line-height: 1.6;
+    "
+  >
+    <div
+      style="
+        max-width: 600px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+      "
+    >
+      <!-- Header -->
+      <div
+        style="
+          background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+          color: white;
+          padding: 45px 35px;
+          text-align: center;
+          border-bottom: 4px solid #1e40af;
+        "
+      >
+        <div style="margin-bottom: 24px">
+          <img
+            src="https://raw.githubusercontent.com/RS-labhub/Radhika/master/public/logo.jpg"
+            alt="Radhika"
+            style="
+              height: 45px;
+              width: auto;
+              display: inline-block;
+              object-fit: contain;
+              border-radius: 6px;
+            "
+          />
+        </div>
+        <h1
+          style="
+            margin: 0 0 12px 0;
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: #ffffff;
+          "
+        >
+          You have been invited
+        </h1>
+        <p style="margin: 0; font-size: 15px; color: #cbd5e1; font-weight: 400">
+          You can create an account on <a href="https://radhika-sharma.vercel.app" style="color:#93c5fd; text-decoration:none;">Radhika</a> using the link below
+        </p>
+      </div>
+
+      <!-- Content -->
+      <div style="padding: 40px 35px">
+        <div style="margin-bottom: 24px">
+          <p
+            style="
+              color: #0f172a;
+              font-size: 17px;
+              font-weight: 600;
+              margin: 0 0 18px 0;
+            "
+          >
+            Hello,
+          </p>
+          <p
+            style="
+              color: #334155;
+              font-size: 15px;
+              line-height: 1.7;
+              margin: 0 0 14px 0;
+            "
+          >
+            You have been invited to create a user on <strong><a href="https://radhika-sharma.vercel.app" style="color:#2b4a7c; text-decoration:none;">Radhika</a></strong>.
+            Click the button below to accept the invite and set up your account.
+          </p>
+        </div>
+
+        <div style="text-align: center; margin-bottom: 20px">
+          <a
+            href="{{ .ConfirmationURL }}"
+            style="
+              background: #1e40af;
+              color: white;
+              padding: 14px 28px;
+              border-radius: 8px;
+              text-decoration: none;
+              font-weight: 700;
+              display: inline-block;
+            "
+            >Accept the invite</a
+          >
+        </div>
+
+        <p style="color: #64748b; font-size: 13px; margin-bottom: 18px">
+          If the button doesn't work, copy and paste the link below into your
+          browser:
+        </p>
+        <p
+          style="
+            word-break: break-word;
+            background: #f8fafc;
+            padding: 12px 14px;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+            color: #1e293b;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+          "
+        >
+          {{ .ConfirmationURL }}
+        </p>
+
+        <div
+          style="
+            margin-top: 26px;
+            background: #f8fafc;
+            padding: 20px;
+            border-radius: 6px;
+            border: 1px solid #e2e8f0;
+          "
+        >
+          <p style="margin: 0; color: #334155; font-size: 14px">
+            If you weren't expecting this invite, you can ignore this email.
+            The invite link will expire for security reasons if unused.
+          </p>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div
+        style="
+          background: linear-gradient(135deg, #0f172a 0%, #020617 100%);
+          color: white;
+          padding: 30px 25px;
+          text-align: center;
+        "
+      >
+        <p
+          style="
+            margin: 0 0 8px 0;
+            color: #e2e8f0;
+            font-size: 14px;
+            font-weight: 600;
+          "
+        >
+          This is an automated invitation email
+        </p>
+        <p style="margin: 0; color: #cbd5e1; font-size: 12px">
+          Please do not reply directly to this message. If you need help,
+          contact <a href="mailto:rs4101976@gmail.com" style="color: #93c5fd; text-decoration: none">Rohan Sharma</a>.
+        </p>
+        <p style="margin: 14px 0 0 0; color: #94a3b8; font-size: 12px">
+          © 2025 Radhika. All rights reserved.
+        </p>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,6 +1,8 @@
 import type { Metadata } from "next"
 import "./globals.css"
 import { ThemeProvider } from "@/components/theme-provider"
+import { AuthProvider } from "@/contexts/auth-context"
+import { Toaster } from "@/components/ui/sonner"
 import { Plus_Jakarta_Sans, Space_Grotesk, Press_Start_2P } from "next/font/google"
 
 const sans = Plus_Jakarta_Sans({ subsets: ["latin"], variable: "--font-sans" })
@@ -38,6 +40,10 @@ export const metadata: Metadata = {
       'Radhika is a versatile AI chatbot designed to assist with a wide range of tasks, from answering questions to providing recommendations and engaging in casual conversation.',
     images: ['/og-image.jpg'],
   },
+  // metadataBase is used to resolve relative URLs in openGraph/twitter images
+  // during static metadata generation. Use an env var in production and
+  // fallback to localhost in dev.
+  metadataBase: new URL(process.env.NEXT_PUBLIC_METADATA_BASE ?? `http://localhost:${process.env.PORT ?? 3000}`),
 }
 
 
@@ -48,9 +54,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${sans.variable} ${display.variable} ${pixel.variable} font-sans antialiased`}>
+      <body suppressHydrationWarning className={`${sans.variable} ${display.variable} ${pixel.variable} font-sans antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          {children}
+          <AuthProvider>
+            {children}
+            <Toaster />
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

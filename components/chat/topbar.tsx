@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { Mode, ModeDefinition, UIStyle } from "@/types/chat"
+import Link from "next/link"
+import { useAuth } from "@/contexts/auth-context"
 import {
   AlertCircle,
   Github,
@@ -15,9 +17,14 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  Activity,
   Volume2,
   VolumeX,
+  Download,
+  Cloud,
+  CloudOff,
 } from "lucide-react"
+import { ProfileSelector } from "./profile-selector"
 
 interface ChatTopbarProps {
   mode: Mode
@@ -29,11 +36,21 @@ interface ChatTopbarProps {
   messageCount: number
   voiceEnabled: boolean
   onToggleVoice: () => void
+  showVoiceToggle?: boolean
   onClearChat: () => void
   onOpenSidebar: () => void
   providerLabel: string
   error: string | null
+  heatmapAvailable?: boolean
+  onOpenHeatmap?: () => void
+  // heatmapOpen and onToggleHeatmap removed: control moved to the sidebar
   onDismissError: () => void
+  userMenu?: React.ReactNode
+  currentProfileId?: string | null
+  onProfileSelect?: (profileId: string | null) => void
+  onExportChat?: () => void
+  pendingQueueCount?: number
+  onSyncQueue?: () => void
 }
 
 export function ChatTopbar({
@@ -50,7 +67,16 @@ export function ChatTopbar({
   onOpenSidebar,
   providerLabel,
   error,
+  heatmapAvailable,
   onDismissError,
+  userMenu,
+  onOpenHeatmap,
+  showVoiceToggle = false,
+  currentProfileId,
+  onProfileSelect,
+  onExportChat,
+  pendingQueueCount = 0,
+  onSyncQueue,
 }: ChatTopbarProps) {
   const isPixel = uiStyle === "pixel"
   const CurrentModeIcon = modeMeta.icon
@@ -74,10 +100,12 @@ export function ChatTopbar({
     : "inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/40 bg-white/70 p-0 text-slate-500 transition-colors hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
 
   const controlsContainerClass = cn(
-    "flex items-center gap-1.5 sm:flex sm:items-center sm:gap-2",
+    "flex items-center gap-1.5 ml-0 flex-wrap sm:flex-nowrap sm:ml-auto sm:gap-2",
     isPixel &&
       "sm:ml-auto sm:grid sm:[grid-template-columns:repeat(3,max-content)] sm:items-center sm:justify-end sm:gap-x-1.5 sm:gap-y-1",
   )
+
+  const { isAuthenticated } = useAuth()
 
   return (
     <div className="flex flex-col gap-2">
@@ -132,6 +160,7 @@ export function ChatTopbar({
           </div>
         </div>
         <div className={controlsContainerClass}>
+          {/* left-side controls (Menu, toggles) — Profile selector will be rendered on the right side below */}
           <Button
             type="button"
             variant="ghost"
@@ -147,64 +176,122 @@ export function ChatTopbar({
             <Menu className="h-4 w-4" />
             <span className={cn(isPixel && "text-[0.75rem] tracking-[0.08em]")}>Menu</span>
           </Button>
+          {/*
           <Badge
             variant="secondary"
+            onClick={onOpenHeatmap}
+            role={onOpenHeatmap ? "button" : undefined}
+            tabIndex={onOpenHeatmap ? 0 : undefined}
+            onKeyDown={
+              onOpenHeatmap
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      onOpenHeatmap()
+                    }
+                  }
+                : undefined
+            }
             className={cn(
-              "h-7 items-center gap-1 rounded-full px-2.5 text-[0.75rem] font-semibold",
+              "h-7 items-center gap-1 rounded-full px-2.5 text-[0.75rem] font-semibold cursor-pointer select-none",
               isPixel
                 ? "pixel-badge h-7 text-[0.62rem] text-slate-600 dark:text-slate-200 sm:text-[0.7rem]"
                 : "border-0 bg-slate-900/5 text-slate-600 dark:bg-white/10 dark:text-white",
             )}
+            aria-label={onOpenHeatmap ? "Open conversation heatmap" : undefined}
           >
             <MessageCircle className="h-3 w-3" />
             {messageCount}
           </Badge>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={onToggleVoice}
-            className={controlButton}
-            aria-pressed={voiceEnabled}
-            aria-label={voiceEnabled ? "Disable voice responses" : "Enable voice responses"}
-          >
-            {voiceEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={onToggleUI}
-            className={controlButton}
-            aria-label="Toggle interface style"
-          >
-            {uiStyle === "modern" ? <Gamepad2 className="h-4 w-4" /> : <Palette className="h-4 w-4" />}
-          </Button>
+          */}
+          {isAuthenticated && showVoiceToggle ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onToggleVoice}
+              className={cn(controlButton)}
+              aria-pressed={voiceEnabled}
+              aria-label={voiceEnabled ? "Disable voice responses" : "Enable voice responses"}
+            >
+              {voiceEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            </Button>
+          ) : null}
+          {/* Pending queue indicator */}
+          {isAuthenticated && pendingQueueCount > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onSyncQueue}
+              className={cn(
+                controlButton,
+                "relative",
+                isPixel
+                  ? "text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
+                  : "text-amber-500 hover:text-amber-600 dark:text-amber-400 dark:hover:text-amber-300",
+              )}
+              aria-label={`${pendingQueueCount} messages pending sync. Click to retry.`}
+              title={`${pendingQueueCount} messages pending sync`}
+            >
+              <CloudOff className="h-4 w-4" />
+              <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[0.6rem] font-bold text-white">
+                {pendingQueueCount > 9 ? "9+" : pendingQueueCount}
+              </span>
+            </Button>
+          )}
+          {!isAuthenticated && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onToggleUI}
+              className={cn(controlButton)}
+              aria-label="Toggle interface style"
+            >
+              {uiStyle === "modern" ? <Gamepad2 className="h-4 w-4" /> : <Palette className="h-4 w-4" />}
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
             size="icon"
             onClick={onToggleTheme}
-            className={controlButton}
+            className={cn(controlButton)}
             aria-label={darkMode ? "Use light theme" : "Use dark theme"}
           >
             {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={onClearChat}
-            className={cn(
-              controlButton,
-              isPixel
-                ? "pixel-control-alert text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300"
-                : "text-rose-500 hover:text-rose-600 dark:text-rose-400 dark:hover:text-rose-300",
-            )}
-            aria-label="Clear conversation"
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          {onExportChat && messageCount > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onExportChat}
+              className={cn(controlButton)}
+              aria-label="Export chat"
+              title="Export chat to PDF"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+          )}
+          {!isAuthenticated && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onClearChat}
+              className={cn(
+                controlButton,
+                isPixel
+                  ? "pixel-control-alert text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300"
+                  : "text-rose-500 hover:text-rose-600 dark:text-rose-400 dark:hover:text-rose-300",
+              )}
+              aria-label="Clear conversation"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -217,6 +304,34 @@ export function ChatTopbar({
               <Github className="h-4 w-4" />
             </a>
           </Button>
+          {/* Right-side group: profile selector + user menu / get full access */}
+          <div className="ml-auto flex items-center gap-2 order-4 sm:order-none">
+            {isAuthenticated && onProfileSelect && (
+              <ProfileSelector
+                mode={mode}
+                currentProfileId={currentProfileId}
+                onProfileSelect={onProfileSelect}
+                uiStyle={uiStyle}
+                className=""
+              />
+            )}
+
+            {isAuthenticated ? (
+              userMenu
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                className={cn(
+                  "ml-2 !h-auto self-center whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium",
+                  isPixel ? "pixel-control text-slate-700 dark:text-slate-200" : "bg-gradient-to-r from-cyan-600 to-blue-600 text-white shadow-sm",
+                )}
+                asChild
+              >
+                <Link href="/auth/login">Get full access</Link>
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 

@@ -1,13 +1,15 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   typescript: {
     ignoreBuildErrors: true,
   },
+  turbopack: {},
   images: {
     unoptimized: true,
+  },
+  webpack(config) {
+    config.devtool = false
+    return config
   },
 }
 

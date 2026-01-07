@@ -10,21 +10,61 @@ interface ActivityMatrixProps {
   messages?: any[]
   currentMode?: string
   uiStyle?: UIStyle
+  isAuthenticated?: boolean
 }
 
-export function ActivityMatrix({ messages = [], currentMode = "general", uiStyle = "modern" }: ActivityMatrixProps) {
+export function ActivityMatrix({ messages = [], currentMode = "general", uiStyle = "modern", isAuthenticated = false }: ActivityMatrixProps) {
   const isPixel = uiStyle === "pixel"
   const mountRef = useRef<HTMLDivElement>(null)
+  const nodeMaterialRef = useRef<THREE.Material | null>(null)
+  const lineMaterialRef = useRef<THREE.Material | null>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
   const networkRef = useRef<THREE.Group | null>(null)
   const animationRef = useRef<number | null>(null)
+  const DEBUG = true
+  const resumeBoostRef = useRef<number>(0)
+  const [instance, setInstance] = useState(0)
   const [stats, setStats] = useState({
     totalMessages: 0,
     avgResponseTime: 0,
     mostUsedMode: "general",
     sessionsToday: 0,
   })
+
+  // central animation loop using refs so it survives re-renders
+  const animateLoop = () => {
+    animationRef.current = requestAnimationFrame(animateLoop)
+
+    const net = networkRef.current
+    const rend = rendererRef.current
+    const scn = sceneRef.current
+    const cam = cameraRef.current
+
+    // support a short resume boost so movement is visible after re-init
+    const boost = resumeBoostRef.current || 0
+    if (net) {
+      if (boost > 0) {
+        net.rotation.y += 0.02
+        net.rotation.x += 0.008
+        resumeBoostRef.current = boost - 1
+      } else {
+        net.rotation.y += 0.005
+        net.rotation.x += 0.002
+      }
+    }
+
+    if (rend && scn && cam) {
+      try {
+        // clear before render to avoid artifacts after resize/context changes
+        try { rend.clear() } catch (e) {}
+        rend.render(scn, cam)
+      } catch (err) {
+        console.warn("[ActivityMatrix] render error", err)
+      }
+    }
+  }
 
   // Calculate real application stats
   useEffect(() => {
@@ -43,25 +83,116 @@ export function ActivityMatrix({ messages = [], currentMode = "general", uiStyle
 
   useEffect(() => {
     if (!mountRef.current) return
+    if (DEBUG) console.debug("[ActivityMatrix] mount effect")
 
     // Scene setup
     const scene = new THREE.Scene()
-    const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000)
+  const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000)
+  cameraRef.current = camera
     const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
 
-    renderer.setSize(150, 150)
+    // Make renderer size match the wrapper so it stays within the layout and is responsive
+    const resizeRenderer = () => {
+      if (!mountRef.current || !renderer) return
+      const width = Math.max(1, mountRef.current.clientWidth)
+      const height = Math.max(1, mountRef.current.clientHeight)
+      if (DEBUG) console.debug("[ActivityMatrix] resizeRenderer", width, height)
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+      renderer.setSize(width, height, false)
+      // update camera aspect so projection matches DOM canvas
+      if (cameraRef.current) {
+        cameraRef.current.aspect = width / height
+        cameraRef.current.updateProjectionMatrix()
+      }
+      // ensure DOM canvas fills its container
+      renderer.domElement.style.width = "100%"
+      renderer.domElement.style.height = "100%"
+      renderer.domElement.style.display = "block"
+    }
+
+    // initial sizing and append
+    resizeRenderer()
     renderer.setClearColor(0x000000, 0)
+    // ensure the canvas fills and gets clipped by the wrapper
+    renderer.domElement.style.borderRadius = "inherit"
+    renderer.domElement.style.pointerEvents = "none"
+    // append renderer DOM element into wrapper
     mountRef.current.appendChild(renderer.domElement)
+
+    try {
+      // some three builds expose resetState to clear GL state
+      // @ts-ignore
+      if (typeof renderer.resetState === "function") renderer.resetState()
+    } catch (e) {}
+
+    // update on window resize and use ResizeObserver for container changes
+    window.addEventListener("resize", resizeRenderer)
+    let ro: ResizeObserver | null = null
+    try {
+      if (typeof ResizeObserver !== "undefined") {
+        ro = new ResizeObserver(resizeRenderer)
+        ro.observe(mountRef.current)
+      }
+    } catch (e) {
+      ro = null
+    }
+    // Pause/resume when the tile is not visible (e.g., collapsed) to avoid RAF getting throttled
+    let io: IntersectionObserver | null = null
+    try {
+        if (typeof IntersectionObserver !== "undefined") {
+          io = new IntersectionObserver((entries) => {
+            const e = entries[0]
+            if (!e) return
+            if (DEBUG) console.debug("[ActivityMatrix] intersection", e.isIntersecting)
+            if (e.isIntersecting) {
+              // prefer a full recreate to avoid partial-suspended WebGL states
+              if (DEBUG) console.debug("[ActivityMatrix] scheduling recreate via IntersectionObserver")
+              // delay slightly to let parent expand transition finish
+              setTimeout(() => setInstance((s) => s + 1), 120)
+            } else {
+              // pause animation when not visible
+              if (animationRef.current) {
+                if (DEBUG) console.debug("[ActivityMatrix] pausing animation via IntersectionObserver")
+                cancelAnimationFrame(animationRef.current)
+                animationRef.current = null
+              }
+            }
+          }, { threshold: 0.05 })
+          io.observe(mountRef.current)
+        }
+    } catch (e) {
+      io = null
+    }
 
     // Create neural network visualization
     const networkGroup = new THREE.Group()
 
     // Create nodes
     const nodeGeometry = new THREE.SphereGeometry(0.05, 8, 8)
+    const getColorForMode = (m: string) => {
+      switch (m) {
+        case "productive":
+        case "productivity":
+          return 0x10b981 // emerald
+        case "wellness":
+          return 0xf43f5e // rose
+        case "learning":
+          return 0x7c3aed // purple
+        case "creative":
+          return 0xf59e0b // amber
+        case "bff":
+          return 0xec4899 // pink
+        case "general":
+        default:
+          return 0x0080ff // cyan/blue
+      }
+    }
+
+    const initialColor = getColorForMode(currentMode)
     const nodeMaterial = new THREE.MeshBasicMaterial({
-      color: 0x0080ff, // Brighter blue for light mode visibility
+      color: initialColor,
       transparent: true,
-      opacity: 0.9, // Higher opacity for better visibility
+      opacity: 0.9,
     })
 
     // Create connections between nodes
@@ -90,44 +221,134 @@ export function ActivityMatrix({ messages = [], currentMode = "general", uiStyle
 
     lineGeometry.setAttribute("position", new THREE.Float32BufferAttribute(linePositions, 3))
     const lineMaterial = new THREE.LineBasicMaterial({
-      color: 0x0080ff, // Brighter blue for light mode visibility
+      color: initialColor,
       transparent: true,
-      opacity: 0.6, // Higher opacity for better visibility
+      opacity: 0.6,
     })
+    // store refs so color can be updated when mode changes
+    nodeMaterialRef.current = nodeMaterial
+    lineMaterialRef.current = lineMaterial
     const lines = new THREE.LineSegments(lineGeometry, lineMaterial)
     networkGroup.add(lines)
 
     scene.add(networkGroup)
     camera.position.z = 2
+  // give a short boost so movement is obvious after init/resume
+  resumeBoostRef.current = 60
 
-    sceneRef.current = scene
-    rendererRef.current = renderer
-    networkRef.current = networkGroup
+  sceneRef.current = scene
+  rendererRef.current = renderer
+  networkRef.current = networkGroup
 
     // Animation loop
     const animate = () => {
       animationRef.current = requestAnimationFrame(animate)
 
-      if (networkGroup) {
-        networkGroup.rotation.y += 0.005
-        networkGroup.rotation.x += 0.002
+      const net = networkRef.current
+      const rend = rendererRef.current
+      const scn = sceneRef.current
+      const cam = cameraRef.current || camera
+
+      if (net) {
+        net.rotation.y += 0.005
+        net.rotation.x += 0.002
       }
 
-      renderer.render(scene, camera)
+      if (rend && scn && cam) {
+        rend.render(scn, cam)
+      }
     }
 
-    animate()
+  // start the central animation loop
+  if (DEBUG) console.debug("[ActivityMatrix] start animateLoop")
+  animateLoop()
 
+    // restart animation when the document becomes visible again (some browsers throttle)
+    const onVisibility = () => {
+      if (DEBUG) console.debug("[ActivityMatrix] visibilitychange", document.visibilityState)
+      if (document.visibilityState === "visible" && !animationRef.current) {
+        if (DEBUG) console.debug("[ActivityMatrix] visibility -> restarting animation")
+        animateLoop()
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibility)
+
+    // handle WebGL context lost to attempt to recover
+    const onContextLost = (e: Event) => {
+      if (DEBUG) console.warn("[ActivityMatrix] webglcontextlost")
+      try { e.preventDefault() } catch (e) {}
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current)
+        animationRef.current = null
+      }
+    }
+    const onContextRestored = () => {
+      if (DEBUG) console.debug("[ActivityMatrix] webglcontextrestored")
+      if (!animationRef.current) animateLoop()
+    }
+    try {
+      renderer.domElement.addEventListener("webglcontextlost", onContextLost)
+      renderer.domElement.addEventListener("webglcontextrestored", onContextRestored)
+    } catch (e) {
+      // ignore if not supported
+    }
+
+    // periodic check to restart animation if it stops unexpectedly (e.g., due to layout shifts)
+    const recoveryInterval = setInterval(() => {
+      if (rendererRef.current && !animationRef.current) {
+        if (DEBUG) console.debug("[ActivityMatrix] recoveryInterval restarting animation")
+        animateLoop()
+      }
+    }, 1000)
     return () => {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current)
       }
-      if (mountRef.current && renderer.domElement) {
+      document.removeEventListener("visibilitychange", onVisibility)
+      try {
+        renderer.domElement.removeEventListener("webglcontextlost", onContextLost)
+        renderer.domElement.removeEventListener("webglcontextrestored", onContextRestored)
+      } catch (e) {}
+      clearInterval(recoveryInterval)
+      window.removeEventListener("resize", resizeRenderer)
+      if (ro && mountRef.current) ro.unobserve(mountRef.current)
+      // nothing to cleanup for debug overlay (removed)
+      if (mountRef.current && renderer.domElement && mountRef.current.contains(renderer.domElement)) {
         mountRef.current.removeChild(renderer.domElement)
       }
       renderer.dispose()
     }
   }, [])
+
+  // update material colors when mode changes
+  useEffect(() => {
+    const getColorForMode = (m: string) => {
+      switch (m) {
+        case "productive":
+        case "productivity":
+          return 0x10b981 // emerald
+        case "wellness":
+          return 0xf43f5e // rose
+        case "learning":
+          return 0x7c3aed // purple
+        case "creative":
+          return 0xf59e0b // amber
+        case "bff":
+          return 0xec4899 // pink
+        case "general":
+        default:
+          return 0x0080ff // cyan/blue
+      }
+    }
+
+    const color = getColorForMode(currentMode)
+    if (nodeMaterialRef.current && (nodeMaterialRef.current as THREE.MeshBasicMaterial).color) {
+      ;(nodeMaterialRef.current as THREE.MeshBasicMaterial).color.setHex(color)
+    }
+    if (lineMaterialRef.current && (lineMaterialRef.current as THREE.LineBasicMaterial).color) {
+      ;(lineMaterialRef.current as THREE.LineBasicMaterial).color.setHex(color)
+    }
+  }, [currentMode])
 
   // Mode usage data based on current session
   const modeUsage = [
@@ -175,7 +396,8 @@ export function ActivityMatrix({ messages = [], currentMode = "general", uiStyle
           <div
             ref={mountRef}
             className={cn(
-              "h-36 w-36 rounded-lg border border-cyan-500/30 bg-gradient-to-br from-gray-100/50 to-white/50 backdrop-blur-sm dark:from-cyan-950/20 dark:to-blue-950/20",
+              // add overflow-hidden so the WebGL canvas is clipped to the rounded border
+              "h-36 w-36 overflow-hidden rounded-lg border border-cyan-500/30 bg-gradient-to-br from-gray-100/50 to-white/50 backdrop-blur-sm dark:from-cyan-950/20 dark:to-blue-950/20",
               isPixel && "pixel-tile h-36 w-36 border-cyan-400/70 bg-white/80 p-2 dark:border-cyan-500/50 dark:bg-slate-900/70",
             )}
           />
