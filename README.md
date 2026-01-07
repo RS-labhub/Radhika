@@ -4,9 +4,7 @@
 
 A modern AI chat assistant built with Next.js 16, React 19, and Supabase. Features multiple LLM providers, image generation, voice interaction, and persistent chat history.
 
-## Demo & Blog
-
-[![YouTube Demo](https://raw.githubusercontent.com/RS-labhub/Radhika/master/public/youtube.jpg)](https://www.youtube.com/watch?v=2FW6IJeOkzI) [![Blog Post](https://raw.githubusercontent.com/RS-labhub/Radhika/master/public/cover-image.png)](https://dev.to/rohan_sharma/creating-a-chatbot-from-scratch-and-vibe-coding-the-ui-1bij)
+**Try now**: https://radhika-sharma.vercel.app
 
 ## Features
 
