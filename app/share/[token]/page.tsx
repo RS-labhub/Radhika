@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import { Loader2, MessageCircle, User, Sun, Moon, Copy, Download } from "lucide-react"
-import type { Chat } from "@/types/chat"
+import type { Chat, Source } from "@/types/chat"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { cn } from "@/lib/utils"
+import { SourcesDisplay } from "@/components/chat/sources-display"
 
 export default function SharedChatPage() {
   const params = useParams()
@@ -392,6 +393,10 @@ export default function SharedChatPage() {
                         >
                           {String(message.content)}
                         </ReactMarkdown>
+                        {/* Display sources if available */}
+                        {!isUser && (message as any).sources && (message as any).sources.length > 0 && (
+                          <SourcesDisplay sources={(message as any).sources} />
+                        )}
                       </div>
                     )}
                   </div>

@@ -40,7 +40,8 @@ import {
   Loader2,
   Pencil,
   Palette,
-  UserCircle
+  UserCircle,
+  BookOpen
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { getStorage } from "@/lib/appwrite/client"
@@ -156,6 +157,8 @@ export default function SettingsPage() {
 
   // Preferences state
   const [voiceEnabled, setVoiceEnabled] = useState(false)
+  const [sourcesEnabled, setSourcesEnabled] = useState(false)
+  const [sourcesType, setSourcesType] = useState<"any" | "wikipedia" | "documentation">("any")
   const [uiStyle, setUIStyle] = useState<"modern" | "pixel">("modern")
   const [isMounted, setIsMounted] = useState(false)
   const [selectedTheme, setSelectedTheme] = useState<string>("system")
@@ -298,8 +301,12 @@ export default function SettingsPage() {
         
         const storedVoice = localStorage.getItem("voice_enabled")
         const storedUIStyle = localStorage.getItem("ui_style")
+        const storedSources = localStorage.getItem("sources_enabled")
+        const storedSourcesType = localStorage.getItem("sources_type")
         if (storedVoice !== null) setVoiceEnabled(storedVoice === "true")
         if (storedUIStyle) setUIStyle(storedUIStyle as "modern" | "pixel")
+        if (storedSources !== null) setSourcesEnabled(storedSources === "true")
+        if (storedSourcesType) setSourcesType(storedSourcesType as "any" | "wikipedia" | "documentation")
         
         setHasLoadedOnce(true)
         setIsLoading(false)
@@ -407,9 +414,13 @@ export default function SettingsPage() {
         // Load preferences from localStorage
         const storedVoice = localStorage.getItem("voice_enabled")
         const storedUIStyle = localStorage.getItem("ui_style")
+        const storedSources = localStorage.getItem("sources_enabled")
+        const storedSourcesType = localStorage.getItem("sources_type")
         
         if (storedVoice !== null) setVoiceEnabled(storedVoice === "true")
         if (storedUIStyle) setUIStyle(storedUIStyle as "modern" | "pixel")
+        if (storedSources !== null) setSourcesEnabled(storedSources === "true")
+        if (storedSourcesType) setSourcesType(storedSourcesType as "any" | "wikipedia" | "documentation")
 
         setHasLoadedOnce(true)
         setLoadError(false)
@@ -664,13 +675,20 @@ export default function SettingsPage() {
   // Persist preferences immediately when they change
   useEffect(() => {
     if (typeof window === "undefined") return
+    if (!hasLoadedOnce) return // Don't persist before initial load
     try {
       localStorage.setItem("voice_enabled", String(voiceEnabled))
       localStorage.setItem("ui_style", uiStyle)
+      localStorage.setItem("sources_enabled", String(sourcesEnabled))
+      localStorage.setItem("sources_type", sourcesType)
+      // Dispatch event to notify chat component of sources change
+      window.dispatchEvent(new CustomEvent("radhika:sourcesChanged", { 
+        detail: { enabled: sourcesEnabled, type: sourcesType } 
+      }))
     } catch (err) {
       console.error("Failed to save preferences:", err)
     }
-  }, [voiceEnabled, uiStyle])
+  }, [voiceEnabled, uiStyle, sourcesEnabled, sourcesType, hasLoadedOnce])
 
   const toggleKeyVisibility = (providerId: string) => {
     setVisibleKeys(prev => ({ ...prev, [providerId]: !prev[providerId] }))
@@ -1188,6 +1206,42 @@ export default function SettingsPage() {
                     </p>
                   </div>
                   <Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} />
+                </div>
+
+                {/* Sources & Citations */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label className="flex items-center gap-2">
+                        <BookOpen className="h-4 w-4" />
+                        Sources & Citations
+                      </Label>
+                      <p className="text-xs text-slate-500">
+                        Show relevant documentation and Wikipedia links with AI responses
+                      </p>
+                    </div>
+                    <Switch checked={sourcesEnabled} onCheckedChange={setSourcesEnabled} />
+                  </div>
+                  
+                  {sourcesEnabled && (
+                    <div className="pl-4 border-l-2 border-slate-200 dark:border-slate-700 space-y-3">
+                      <Label className="text-sm">Source Type</Label>
+                      <RadioGroup value={sourcesType} onValueChange={(val) => setSourcesType(val as "any" | "wikipedia" | "documentation")}>
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="any" id="sources-any" />
+                          <Label htmlFor="sources-any" className="font-normal">Any (Documentation, Wikipedia, Articles)</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="wikipedia" id="sources-wikipedia" />
+                          <Label htmlFor="sources-wikipedia" className="font-normal">Wikipedia Only</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="documentation" id="sources-documentation" />
+                          <Label htmlFor="sources-documentation" className="font-normal">Documentation Only</Label>
+                        </div>
+                      </RadioGroup>
+                    </div>
+                  )}
                 </div>
 
               </CardContent>

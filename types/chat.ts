@@ -107,8 +107,16 @@ export interface ChatMessage {
 	role: "user" | "assistant" | "system"
 	content: string
 	metadata?: Record<string, any>
+	sources?: Source[]
 	created_at: string
 	is_favorite: boolean
+}
+
+export interface Source {
+	title: string
+	url: string
+	type?: "documentation" | "wikipedia" | "article" | "other"
+	snippet?: string
 }
 
 export interface Favorite {

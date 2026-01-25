@@ -88,6 +88,9 @@ export default function FuturisticRadhika() {
   const isGeneratingImageRef = useRef(false)
   const [isChatLoading, setIsChatLoading] = useState(false)
 
+  const [sourcesEnabled, setSourcesEnabled] = useState(false)
+  const [sourcesType, setSourcesType] = useState<"any" | "wikipedia" | "documentation">("any")
+
   const chatAbortControllerRef = useRef<AbortController | null>(null)
   const isChatLoadingRef = useRef(false)
   const handleComposerSubmitRef = useRef<((event: FormEvent<HTMLFormElement>) => Promise<void>) | null>(null)
@@ -946,6 +949,28 @@ export default function FuturisticRadhika() {
     if (typeof window === "undefined") return
     localStorage.setItem(PERSONALIZATION_STORAGE_KEY, JSON.stringify(userPersonalization))
   }, [userPersonalization])
+
+  // Load and listen for sources settings changes
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    
+    // Load initial settings
+    const sourcesEnabledVal = localStorage.getItem("sources_enabled") === "true"
+    const sourcesTypeVal = localStorage.getItem("sources_type") as "any" | "wikipedia" | "documentation"
+    setSourcesEnabled(sourcesEnabledVal)
+    if (sourcesTypeVal) setSourcesType(sourcesTypeVal)
+    
+    // Listen for changes from settings dialog
+    const handleSourcesChanged = (event: CustomEvent<{enabled: boolean; type: string}>) => {
+      setSourcesEnabled(event.detail.enabled)
+      setSourcesType(event.detail.type as "any" | "wikipedia" | "documentation")
+    }
+    
+    window.addEventListener("radhika:sourcesChanged", handleSourcesChanged as EventListener)
+    return () => {
+      window.removeEventListener("radhika:sourcesChanged", handleSourcesChanged as EventListener)
+    }
+  }, [])
 
   const combinedError = error || speechError
 
@@ -2041,6 +2066,34 @@ export default function FuturisticRadhika() {
         throw new Error('No response received from AI')
       }
 
+      // Extract sources from the AI response (only if sources are enabled)
+      if (sourcesEnabled) {
+        const { extractSourcesFromContent, addExampleSources, filterSourcesByType } = await import('@/lib/chat/extract-sources')
+        let extractedSources = extractSourcesFromContent(accumulatedContent)
+        
+        // If no sources found in the content, try to add topic-based sources
+        if (extractedSources.length === 0) {
+          extractedSources = addExampleSources(accumulatedContent)
+        }
+        
+        // Filter by source type preference
+        if (sourcesType !== "any") {
+          extractedSources = filterSourcesByType(extractedSources, sourcesType)
+        }
+        
+        // Update message with sources if any were found
+        if (extractedSources.length > 0) {
+          console.log(`✅ Extracted ${extractedSources.length} sources from AI response`)
+          setMessages((prev: any) =>
+            prev.map((msg: any) =>
+              msg.id === assistantMessageId 
+                ? { ...msg, sources: extractedSources } 
+                : msg
+            )
+          )
+        }
+      }
+
       // Auto-speak the response if voice is enabled
       if (voiceEnabledRef.current && accumulatedContent) {
         speakMessage(accumulatedContent, undefined, mode)
@@ -2075,7 +2128,7 @@ export default function FuturisticRadhika() {
       setIsChatLoading(false)
       chatAbortControllerRef.current = null
     }
-  }, [mode, provider, currentApiKey, setMessages, speakMessage])
+  }, [mode, provider, currentApiKey, setMessages, speakMessage, sourcesEnabled, sourcesType])
 
   const currentMode = useMemo(() => MODES[mode], [mode])
   const providerLabel = useMemo(() => PROVIDERS[provider].name, [provider])
