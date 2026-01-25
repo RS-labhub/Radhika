@@ -76,18 +76,21 @@ export function ProfileManager({
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Get user ID (Appwrite uses $id)
+  const userId = user?.$id
+
   // Fetch profiles for the current mode
   useEffect(() => {
     const fetchProfiles = async () => {
-      if (!user?.id || !canUseProfiles) {
+      if (!userId || !canUseProfiles) {
         setProfiles([])
         setIsLoading(false)
         return
       }
 
       try {
-        const data = await getProfilesByMode(user.id, mode)
-        setProfiles(data)
+        const data = await getProfilesByMode(userId, mode)
+        setProfiles(data as ChatProfile[])
       } catch (err) {
         console.error("Failed to fetch profiles:", err)
       } finally {
@@ -96,17 +99,17 @@ export function ProfileManager({
     }
 
     fetchProfiles()
-  }, [user?.id, mode, canUseProfiles])
+  }, [userId, mode, canUseProfiles])
 
   const handleCreateProfile = async () => {
-    if (!user?.id || !newProfileName.trim()) return
+    if (!userId || !newProfileName.trim()) return
 
     setIsSaving(true)
     setError(null)
 
     try {
-      const profile = await createProfile(user.id, mode, newProfileName.trim())
-      setProfiles(prev => [...prev, profile])
+      const profile = await createProfile(userId, mode, newProfileName.trim())
+      setProfiles(prev => [...prev, profile as ChatProfile])
       setNewProfileName("")
       setIsCreateDialogOpen(false)
       onSelectProfile(profile.id)
@@ -125,7 +128,7 @@ export function ProfileManager({
 
     try {
       const updated = await renameProfile(selectedProfile.id, newProfileName.trim())
-      setProfiles(prev => prev.map(p => p.id === updated.id ? updated : p))
+      setProfiles(prev => prev.map(p => p.id === updated.id ? (updated as ChatProfile) : p))
       setNewProfileName("")
       setIsRenameDialogOpen(false)
       setSelectedProfile(null)

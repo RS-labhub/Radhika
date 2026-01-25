@@ -3,13 +3,16 @@ import type { ImageGenerationProvider, ImageProviderId } from "@/types/image"
 export const IMAGE_PROVIDERS: Record<ImageProviderId, ImageGenerationProvider> = {
   pollinations_free: {
     id: "pollinations_free",
-    name: "AI Image Generator (Free)",
+    name: "AI Image Generator (Pollinations)",
     requiresKey: false,
     models: [
-      { id: "turbo", label: "Turbo (Fast Generation)" },
-      { id: "sdxl", label: "Higher Quality (SDXL, Slower)" },
+      { id: "flux", label: "Flux Schnell (Fast & Free)" },
+      { id: "zimage", label: "Z-Image Turbo (Realistic)" },
+      { id: "turbo", label: "SDXL Turbo (Fast)" },
+      { id: "klein", label: "FLUX.2 Klein 4B (NEW)" },
+      { id: "gptimage", label: "GPT Image 1 Mini" },
     ],
-    defaultModel: "turbo",
+    defaultModel: "flux",
     sizes: [
       { id: "post", label: "X/Twitter Post (1200x675)", width: 1200, height: 675 },
       { id: "square_small", label: "Square (512x512)", width: 512, height: 512 },

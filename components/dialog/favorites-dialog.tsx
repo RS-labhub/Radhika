@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { chatService } from "@/lib/supabase/chat-service"
+import { chatService } from "@/lib/appwrite/chat-service"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
@@ -49,7 +49,7 @@ export function FavoritesDialog({ children, open, onOpenChange }: FavoritesDialo
     try {
       setIsLoading(true)
       const data = await chatService.getFavorites()
-      setFavorites(data as FavoriteItem[])
+      setFavorites(data as unknown as FavoriteItem[])
     } catch (err) {
       console.error("Failed to load favorites:", err)
       toast.error("Failed to load favorites")
@@ -60,7 +60,7 @@ export function FavoritesDialog({ children, open, onOpenChange }: FavoritesDialo
 
   const handleRemoveFavorite = async (messageId: string) => {
     try {
-      await chatService.removeFromFavorites(messageId)
+      await chatService.removeFavorite(messageId)
       setFavorites(prev => prev.filter(f => f.message_id !== messageId))
       toast.success("Removed from favorites")
     } catch (err) {

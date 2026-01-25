@@ -1,63 +1,85 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createServerSupabaseClient } from "../../../lib/supabase/server"
+import { createServerAppwriteClient, createServiceClient, Query, ID, Permission, Role } from "../../../lib/appwrite/server"
+import { APPWRITE_CONFIG } from "../../../lib/appwrite/config"
 import { robustQuery, errorResponse, successResponse, CACHE_HEADERS } from "../../../lib/api-utils"
 
 // GET /api/chats - Get all chats for the authenticated user
 export async function GET(request: NextRequest) {
   try {
-    const supabase = (await createServerSupabaseClient()) as any
+    const { account } = await createServerAppwriteClient()
+    const serviceClient = createServiceClient()
     
-    // Get user with timeout
-    const authResult: any = await robustQuery(
-      () => supabase.auth.getUser(),
-      { timeout: 5000, operationName: "Auth check" }
-    )
-
-    if (authResult.error || !authResult.data?.user) {
-      return errorResponse("Unauthorized", 401)
+    // Get user - try session first, then fall back to x-user-id header
+    let user: any
+    try {
+      user = await account.get()
+    } catch (error: any) {
+      // Try to get user ID from header as fallback
+      const userIdHeader = request.headers.get('x-user-id')
+      if (userIdHeader) {
+        // Verify user exists via service client
+        try {
+          user = await serviceClient.users.get(userIdHeader)
+        } catch {
+          return errorResponse("Unauthorized", 401)
+        }
+      } else {
+        if (error.code === 401) {
+          return errorResponse("Unauthorized", 401)
+        }
+        throw error
+      }
     }
-
-    const user = authResult.data.user
 
     const searchParams = request.nextUrl.searchParams
     const mode = searchParams.get("mode")
     const profileId = searchParams.get("profileId")
     const includeArchived = searchParams.get("includeArchived") === "true"
-    const limit = Math.min(parseInt(searchParams.get("limit") || "50", 10), 100) // Cap at 100
+    const limit = Math.min(parseInt(searchParams.get("limit") || "50", 10), 100)
 
-    // Build and execute query with timeout
-    const result: any = await robustQuery(
-      async () => {
-        let query = supabase
-          .from("chats")
-          .select("id, title, mode, profile_id, last_message_at, created_at, is_archived")
-          .eq("user_id", user.id)
-          .order("last_message_at", { ascending: false, nullsFirst: false })
-          .limit(limit)
+    // Build queries
+    const queries = [
+      Query.equal("user_id", user.$id),
+      Query.orderDesc("last_message_at"),
+      Query.limit(limit),
+      Query.isNull("deleted_at"),
+    ]
 
-        if (mode) {
-          query = query.eq("mode", mode)
-        }
-
-        if (profileId) {
-          query = query.eq("profile_id", profileId)
-        }
-
-        if (!includeArchived) {
-          query = query.eq("is_archived", false)
-        }
-
-        return query
-      },
-      { timeout: 8000, operationName: "Fetch chats" }
-    )
-
-    if (result.error) {
-      throw result.error
+    if (mode) {
+      queries.push(Query.equal("mode", mode))
     }
 
-    const response = successResponse({ chats: result.data || [] })
-    // Add cache headers
+    if (profileId) {
+      queries.push(Query.equal("profile_id", profileId))
+    }
+
+    if (!includeArchived) {
+      queries.push(Query.equal("is_archived", false))
+    }
+
+    // Use service client for elevated permissions
+    const result = await serviceClient.databases.listDocuments(
+      APPWRITE_CONFIG.databaseId,
+      APPWRITE_CONFIG.collections.chats,
+      queries
+    )
+
+    // Map documents to expected format
+    const chats = result.documents.map((doc: any) => ({
+      id: doc.$id,
+      title: doc.title,
+      mode: doc.mode,
+      profile_id: doc.profile_id,
+      user_id: doc.user_id,
+      last_message_at: doc.last_message_at,
+      created_at: doc.created_at || doc.$createdAt,
+      updated_at: doc.updated_at || doc.$updatedAt,
+      is_archived: doc.is_archived || false,
+      message_count: doc.message_count || 0,
+      last_message_preview: doc.last_message_preview,
+    }))
+
+    const response = successResponse({ chats })
     Object.entries(CACHE_HEADERS.noCache).forEach(([key, value]) => {
       response.headers.set(key, value)
     })
@@ -77,18 +99,31 @@ export async function GET(request: NextRequest) {
 // POST /api/chats - Create a new chat
 export async function POST(request: NextRequest) {
   try {
-    const supabase = (await createServerSupabaseClient()) as any
+    // Get user ID from request header (set by middleware or client)
+    // Or try to get from session cookie
+    const { account } = await createServerAppwriteClient()
+    const serviceClient = createServiceClient()
     
-    const authResult: any = await robustQuery(
-      () => supabase.auth.getUser(),
-      { timeout: 5000, operationName: "Auth check" }
-    )
-
-    if (authResult.error || !authResult.data?.user) {
-      return errorResponse("Unauthorized", 401)
+    let user: any
+    try {
+      user = await account.get()
+    } catch (error: any) {
+      // Try to get user ID from header as fallback
+      const userIdHeader = request.headers.get('x-user-id')
+      if (userIdHeader) {
+        // Verify user exists via service client
+        try {
+          user = await serviceClient.users.get(userIdHeader)
+        } catch {
+          return errorResponse("Unauthorized", 401)
+        }
+      } else {
+        if (error.code === 401) {
+          return errorResponse("Unauthorized", 401)
+        }
+        throw error
+      }
     }
-
-    const user = authResult.data.user
 
     const body = await request.json()
     const { mode, title, profileId } = body
@@ -97,33 +132,51 @@ export async function POST(request: NextRequest) {
       return errorResponse("Mode and title are required", 400)
     }
 
-    const result: any = await robustQuery(
-      () => supabase
-        .from("chats")
-        .insert({
-          user_id: user.id,
-          mode,
-          title,
-          profile_id: profileId || null,
-          last_message_at: new Date().toISOString(),
-        })
-        .select()
-        .single(),
-      { timeout: 8000, operationName: "Create chat" }
+    const now = new Date().toISOString()
+
+    // Use service client for document creation with user permissions
+    const doc = await serviceClient.databases.createDocument(
+      APPWRITE_CONFIG.databaseId,
+      APPWRITE_CONFIG.collections.chats,
+      ID.unique(),
+      {
+        user_id: user.$id,
+        profile_id: profileId || null,
+        mode,
+        title,
+        message_count: 0,
+        last_message_preview: null,
+        created_at: now,
+        updated_at: now,
+        last_message_at: now,
+        is_archived: false,
+        deleted_at: null,
+        is_public: false,
+        share_token: null,
+        shared_at: null,
+      },
+      [
+        Permission.read(Role.user(user.$id)),
+        Permission.update(Role.user(user.$id)),
+        Permission.delete(Role.user(user.$id)),
+      ]
     )
 
-    if (result.error) {
-      throw result.error
-    }
-
-    return successResponse({ chat: result.data }, 201)
+    return successResponse({
+      chat: {
+        id: doc.$id,
+        user_id: doc.user_id,
+        profile_id: doc.profile_id,
+        mode: doc.mode,
+        title: doc.title,
+        created_at: doc.created_at,
+        updated_at: doc.updated_at,
+        last_message_at: doc.last_message_at,
+        is_archived: doc.is_archived,
+      }
+    }, 201)
   } catch (error: any) {
     console.error("Error creating chat:", error)
-    return errorResponse(
-      error.message?.includes("timed out") 
-        ? "Request timed out. Please try again." 
-        : "Failed to create chat",
-      error.message?.includes("timed out") ? 504 : 500
-    )
+    return errorResponse("Failed to create chat", 500)
   }
 }

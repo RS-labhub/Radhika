@@ -7,16 +7,15 @@ import { useAuth } from "@/contexts/auth-context"
 import { useFeatureAccess } from "@/hooks/use-feature-access"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { UserAvatar } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import { 
   MessageSquare, 
-  User, 
-  Settings, 
+  User,
   Star, 
-  Clock, 
-  ArrowRight,
+  Clock,
   Brain,
   Heart,
   BookOpen,
@@ -29,7 +28,7 @@ import {
 import { cn } from "@/lib/utils"
 import { getRecentChats, getChatStats } from "@/lib/services/chats"
 import { getProfiles } from "@/lib/services/profiles"
-import type { Chat, ChatProfile } from "@/types/database"
+import type { Chat, ChatProfile } from "@/types/chat"
 
 const MODE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   general: Brain,
@@ -50,12 +49,13 @@ const MODE_COLORS: Record<string, string> = {
 }
 
 export default function DashboardPage() {
-  const { user, profile, isLoading: authLoading, signOut } = useAuth()
+  const { user, isLoading: authLoading, signOut } = useAuth()
   const { isAuthenticated } = useFeatureAccess()
   const router = useRouter()
   
   const [recentChats, setRecentChats] = useState<Chat[]>([])
   const [profiles, setProfiles] = useState<ChatProfile[]>([])
+  const [userProfile, setUserProfile] = useState<{ display_name?: string; avatar_url?: string } | null>(null)
   const [stats, setStats] = useState<{
     totalChats: number
     totalMessages: number
@@ -66,12 +66,38 @@ export default function DashboardPage() {
   const [loadError, setLoadError] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
 
+  // Fetch user profile with avatar
+  useEffect(() => {
+    const fetchUserProfile = async () => {
+      if (!user) return
+      try {
+        const response = await fetch("/api/users", {
+          credentials: 'include',
+          headers: {
+            'x-user-id': user.$id,
+          },
+        })
+        if (response.ok) {
+          const data = await response.json()
+          console.log("Dashboard: User profile data:", data.profile)
+          console.log("Dashboard: avatar_url:", data.profile?.avatar_url)
+          setUserProfile(data.profile)
+        } else {
+          console.error("Dashboard: Failed to fetch user profile, status:", response.status)
+        }
+      } catch (error) {
+        console.error("Failed to fetch user profile:", error)
+      }
+    }
+    fetchUserProfile()
+  }, [user])
+
   // Load cached data from sessionStorage on mount
   useEffect(() => {
-    if (typeof window === 'undefined' || !user?.id) return
+    if (typeof window === 'undefined' || !user?.$id) return
     
     try {
-      const cacheKey = `dashboard-cache-${user.id}`
+      const cacheKey = `dashboard-cache-${user.$id}`
       const cached = sessionStorage.getItem(cacheKey)
       if (cached) {
         const { chats, profiles: cachedProfiles, stats: cachedStats, timestamp } = JSON.parse(cached)
@@ -87,7 +113,7 @@ export default function DashboardPage() {
     } catch (e) {
       // Ignore cache errors
     }
-  }, [user?.id])
+  }, [user?.$id])
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -123,7 +149,7 @@ export default function DashboardPage() {
   }, [loadError])
 
   // SessionStorage cache key and duration
-  const CACHE_KEY = `dashboard_data_${user?.id || 'anon'}`
+  const CACHE_KEY = `dashboard_data_${user?.$id || 'anon'}`
   const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes - data will be fresh for this duration
 
   const loadFromCache = () => {
@@ -157,7 +183,7 @@ export default function DashboardPage() {
     const controller = new AbortController()
     
     const fetchData = async () => {
-      if (!user?.id) {
+      if (!user?.$id) {
         setIsLoading(false)
         return
       }
@@ -188,9 +214,9 @@ export default function DashboardPage() {
         }, 15000) // Reduced to 15 seconds
         
         const [chatsData, profilesData, statsData] = await Promise.all([
-          getRecentChats(user.id, 5),
-          getProfiles(user.id),
-          getChatStats(user.id),
+          getRecentChats(user.$id, 5),
+          getProfiles(user.$id),
+          getChatStats(user.$id),
         ])
 
         clearTimeout(safetyTimeout)
@@ -228,7 +254,7 @@ export default function DashboardPage() {
     return () => {
       controller.abort()
     }
-  }, [user?.id, hasLoadedOnce, retryCount])
+  }, [user?.$id, hasLoadedOnce, retryCount])
 
   // Manual retry function - clears cache to force fresh fetch
   const handleRetry = () => {
@@ -288,8 +314,8 @@ export default function DashboardPage() {
     )
   }
 
-  const displayName = profile?.display_name || user?.email?.split("@")[0] || "User"
-  const initials = (profile?.display_name || user?.email?.split("@")[0] || "User").slice(0, 2).toUpperCase()
+  const displayName = user?.name || user?.email?.split("@")[0] || "User"
+  const initials = (user?.name || user?.email?.split("@")[0] || "User").slice(0, 2).toUpperCase()
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
@@ -299,18 +325,19 @@ export default function DashboardPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
-            <Avatar className="h-14 w-14 border-2 border-white shadow-lg">
-              <AvatarImage src={profile?.avatar_url || undefined} />
-              <AvatarFallback className="bg-gradient-to-br from-cyan-500 to-blue-600 text-white text-lg">
-                {initials}
-              </AvatarFallback>
-            </Avatar>
+            <UserAvatar 
+              avatarUrl={userProfile?.avatar_url}
+              name={userProfile?.display_name || displayName}
+              email={user?.email}
+              size="lg"
+              className="border-2 border-white shadow-lg"
+            />
             <div>
               <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
-                Welcome back, {displayName}!
+                Welcome back, {userProfile?.display_name || displayName}!
               </h1>
               <p className="text-slate-500 dark:text-slate-400">
-                {profile?.role === "premium" ? "Premium Member" : "Member"}
+                Member
               </p>
             </div>
           </div>
@@ -410,32 +437,34 @@ export default function DashboardPage() {
                   </Link>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {recentChats.map((chat) => {
-                    const ModeIcon = MODE_ICONS[chat.mode] || Brain
-                    return (
-                      <Link key={chat.id} href={`/?chatId=${chat.id}`}>
-                        <div className="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
-                          <div className={cn(
-                            "p-2 rounded-lg bg-slate-100 dark:bg-slate-800",
-                            MODE_COLORS[chat.mode]
-                          )}>
-                            <ModeIcon className="h-4 w-4" />
+                <ScrollArea className="h-[280px]">
+                  <div className="space-y-2 pr-4">
+                    {recentChats.map((chat) => {
+                      const ModeIcon = MODE_ICONS[chat.mode] || Brain
+                      return (
+                        <Link key={chat.id} href={`/?chatId=${chat.id}`}>
+                          <div className="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+                            <div className={cn(
+                              "p-2 rounded-lg bg-slate-100 dark:bg-slate-800",
+                              MODE_COLORS[chat.mode]
+                            )}>
+                              <ModeIcon className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-slate-900 dark:text-white truncate">
+                                {chat.title}
+                              </p>
+                              <p className="text-sm text-slate-500 dark:text-slate-400">
+                                {new Date(chat.last_message_at || chat.created_at).toLocaleDateString()}
+                              </p>
+                            </div>
+                            <ChevronRight className="h-4 w-4 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-slate-900 dark:text-white truncate">
-                              {chat.title}
-                            </p>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">
-                              {new Date(chat.last_message_at || chat.created_at).toLocaleDateString()}
-                            </p>
-                          </div>
-                          <ChevronRight className="h-4 w-4 text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </div>
-                      </Link>
-                    )
-                  })}
-                </div>
+                        </Link>
+                      )
+                    })}
+                  </div>
+                </ScrollArea>
               )}
             </CardContent>
           </Card>
@@ -465,34 +494,36 @@ export default function DashboardPage() {
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  {profiles.map((chatProfile) => {
-                    const ModeIcon = MODE_ICONS[chatProfile.mode] || Brain
-                    return (
-                      <Link key={chatProfile.id} href={`/?profileId=${chatProfile.id}&mode=${chatProfile.mode}`}>
-                        <div className="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
-                          <div className={cn(
-                            "p-2 rounded-lg bg-slate-100 dark:bg-slate-800",
-                            MODE_COLORS[chatProfile.mode]
-                          )}>
-                            <ModeIcon className="h-4 w-4" />
+                <ScrollArea className="h-[280px]">
+                  <div className="space-y-2 pr-4">
+                    {profiles.map((chatProfile) => {
+                      const ModeIcon = MODE_ICONS[chatProfile.mode] || Brain
+                      return (
+                        <Link key={chatProfile.id} href={`/?profileId=${chatProfile.id}&mode=${chatProfile.mode}`}>
+                          <div className="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors group">
+                            <div className={cn(
+                              "p-2 rounded-lg bg-slate-100 dark:bg-slate-800",
+                              MODE_COLORS[chatProfile.mode]
+                            )}>
+                              <ModeIcon className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="font-medium text-slate-900 dark:text-white truncate">
+                                {chatProfile.name}
+                              </p>
+                              <p className="text-sm text-slate-500 dark:text-slate-400 capitalize">
+                                {chatProfile.mode} mode
+                              </p>
+                            </div>
+                            <Badge variant="secondary" className="text-xs capitalize">
+                              {chatProfile.mode}
+                            </Badge>
                           </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-medium text-slate-900 dark:text-white truncate">
-                              {chatProfile.name}
-                            </p>
-                            <p className="text-sm text-slate-500 dark:text-slate-400 capitalize">
-                              {chatProfile.mode} mode
-                            </p>
-                          </div>
-                          <Badge variant="secondary" className="text-xs capitalize">
-                            {chatProfile.mode}
-                          </Badge>
-                        </div>
-                      </Link>
-                    )
-                  })}
-                </div>
+                        </Link>
+                      )
+                    })}
+                  </div>
+                </ScrollArea>
               )}
             </CardContent>
           </Card>

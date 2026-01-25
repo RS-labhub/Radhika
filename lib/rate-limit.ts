@@ -1,4 +1,5 @@
-import { createServerSupabaseClient } from "./supabase/server"
+import { createServiceClient, ID, Query } from "./appwrite/server"
+import { APPWRITE_CONFIG } from "./appwrite/config"
 
 interface RateLimitConfig {
   maxRequests: number
@@ -53,23 +54,100 @@ async function checkAuthenticatedRateLimit(
   resetAt: Date
   limit: number
 }> {
-  const supabase = (await createServerSupabaseClient()) as any
+  const { databases } = createServiceClient()
   const now = new Date()
   const windowStart = new Date(now.getTime() - config.windowMs)
 
   // Use a composite identifier (userId:action) so we can track per-action limits
   const compositeIdentifier = `${userId}:${action}`
 
-  // Get or create rate limit record
-  const { data: existing, error: fetchError } = await supabase
-    .from("rate_limits")
-    .select("*")
-    .eq("identifier", compositeIdentifier)
-    .single()
+  try {
+    // Get rate limit record
+    const response = await databases.listDocuments(
+      APPWRITE_CONFIG.databaseId,
+      APPWRITE_CONFIG.collections.rateLimits,
+      [
+        Query.equal("identifier", compositeIdentifier),
+        Query.limit(1),
+      ]
+    )
 
-  if (fetchError && fetchError.code !== "PGRST116") {
-    // PGRST116 is "not found"
-    console.error("Error fetching rate limit:", fetchError)
+    const existing = response.documents[0]
+
+    if (!existing) {
+      // Create new rate limit record
+      const resetAt = new Date(now.getTime() + config.windowMs)
+      await databases.createDocument(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.rateLimits,
+        ID.unique(),
+        {
+          identifier: compositeIdentifier,
+          request_count: 1,
+          window_start: now.toISOString(),
+        }
+      )
+
+      return {
+        allowed: true,
+        remaining: config.maxRequests - 1,
+        resetAt,
+        limit: config.maxRequests,
+      }
+    }
+
+    // Check if window has expired
+    const existingWindowStart = new Date(existing.window_start)
+    if (existingWindowStart < windowStart) {
+      // Reset the window
+      const resetAt = new Date(now.getTime() + config.windowMs)
+      await databases.updateDocument(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.rateLimits,
+        existing.$id,
+        {
+          request_count: 1,
+          window_start: now.toISOString(),
+        }
+      )
+
+      return {
+        allowed: true,
+        remaining: config.maxRequests - 1,
+        resetAt,
+        limit: config.maxRequests,
+      }
+    }
+
+    // Compute reset time based on stored window_start + windowMs
+    const resetAtFromRow = new Date(new Date(existing.window_start).getTime() + config.windowMs)
+
+    // Check if limit exceeded
+    if ((existing.request_count ?? 0) >= config.maxRequests) {
+      return {
+        allowed: false,
+        remaining: 0,
+        resetAt: resetAtFromRow,
+        limit: config.maxRequests,
+      }
+    }
+
+    // Increment count
+    await databases.updateDocument(
+      APPWRITE_CONFIG.databaseId,
+      APPWRITE_CONFIG.collections.rateLimits,
+      existing.$id,
+      { request_count: (existing.request_count ?? 0) + 1 }
+    )
+
+    return {
+      allowed: true,
+      remaining: config.maxRequests - (existing.request_count ?? 0) - 1,
+      resetAt: resetAtFromRow,
+      limit: config.maxRequests,
+    }
+  } catch (error) {
+    console.error("Error checking rate limit:", error)
     // Allow request if we can't check rate limit
     return {
       allowed: true,
@@ -77,70 +155,6 @@ async function checkAuthenticatedRateLimit(
       resetAt: new Date(now.getTime() + config.windowMs),
       limit: config.maxRequests,
     }
-  }
-
-  if (!existing) {
-    // Create new rate limit record
-    const resetAt = new Date(now.getTime() + config.windowMs)
-    await supabase.from("rate_limits").insert({
-      identifier: compositeIdentifier,
-      request_count: 1,
-      window_start: now.toISOString(),
-    })
-
-    return {
-      allowed: true,
-      remaining: config.maxRequests - 1,
-      resetAt,
-      limit: config.maxRequests,
-    }
-  }
-
-  // Check if window has expired
-  const existingWindowStart = new Date(existing.window_start)
-  if (existingWindowStart < windowStart) {
-    // Reset the window
-    const resetAt = new Date(now.getTime() + config.windowMs)
-    await supabase
-      .from("rate_limits")
-      .update({
-        request_count: 1,
-        window_start: now.toISOString(),
-      })
-      .eq("id", existing.id)
-
-    return {
-      allowed: true,
-      remaining: config.maxRequests - 1,
-      resetAt,
-      limit: config.maxRequests,
-    }
-  }
-
-  // Compute reset time based on stored window_start + windowMs
-  const resetAtFromRow = new Date(new Date(existing.window_start).getTime() + config.windowMs)
-
-  // Check if limit exceeded
-  if ((existing.request_count ?? 0) >= config.maxRequests) {
-    return {
-      allowed: false,
-      remaining: 0,
-      resetAt: resetAtFromRow,
-      limit: config.maxRequests,
-    }
-  }
-
-  // Increment count
-  await supabase
-    .from("rate_limits")
-    .update({ request_count: (existing.request_count ?? 0) + 1 })
-    .eq("id", existing.id)
-
-  return {
-    allowed: true,
-    remaining: config.maxRequests - (existing.request_count ?? 0) - 1,
-    resetAt: resetAtFromRow,
-    limit: config.maxRequests,
   }
 }
 

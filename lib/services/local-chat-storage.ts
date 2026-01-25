@@ -3,10 +3,10 @@
  * 
  * This service implements a local-first approach where:
  * 1. ALL chats and messages are stored in localStorage FIRST
- * 2. Sync to Supabase happens in the background (non-blocking)
+ * 2. Sync to Appwrite happens in the background (non-blocking)
  * 3. Chat history is always available from localStorage
  * 4. No loading states that block the UI
- * 5. Graceful merge when Supabase data becomes available
+ * 5. Graceful merge when Appwrite data becomes available
  */
 
 import type { Chat, ChatMessage, Mode } from '@/types/chat'
@@ -28,7 +28,7 @@ export interface LocalChat {
   
   // Local-first specific fields
   localId: string // Always present, used for localStorage key
-  remoteId?: string // Supabase ID once synced
+  remoteId?: string // Appwrite ID once synced
   syncStatus: 'pending' | 'synced' | 'failed'
   syncError?: string
   lastSyncAt?: string
@@ -37,9 +37,9 @@ export interface LocalChat {
 export interface LocalMessage {
   id: string
   localId: string // Always present
-  remoteId?: string // Supabase ID once synced
+  remoteId?: string // Appwrite ID once synced
   chatId: string // References LocalChat.localId
-  remoteChatId?: string // Supabase chat ID
+  remoteChatId?: string // Appwrite chat ID
   role: 'user' | 'assistant' | 'system'
   content: string
   metadata?: Record<string, any>
@@ -78,6 +78,7 @@ interface SyncQueueItem {
 const CHATS_STORAGE_KEY = 'radhika-local-chats'
 const MESSAGES_STORAGE_KEY = 'radhika-local-messages'
 const SYNC_QUEUE_KEY = 'radhika-sync-queue'
+const DELETED_CHATS_KEY = 'radhika-deleted-chats' // Track deleted chats to prevent re-merge
 const MAX_RETRIES = 10
 const SYNC_INTERVAL = 15000 // 15 seconds
 const INITIAL_RETRY_DELAY = 2000
@@ -104,6 +105,7 @@ class LocalChatStorageService {
   private chats: Map<string, LocalChat> = new Map()
   private messages: Map<string, LocalMessage> = new Map()
   private syncQueue: Map<string, SyncQueueItem> = new Map()
+  private deletedChatIds: Set<string> = new Set() // Track deleted chats to prevent re-merge
   private eventListeners: Set<EventCallback> = new Set()
   private syncIntervalId: NodeJS.Timeout | null = null
   private isSyncing = false
@@ -115,6 +117,9 @@ class LocalChatStorageService {
       this.initialize()
     }
   }
+
+  private saveTimeout: NodeJS.Timeout | null = null
+  private readonly SAVE_DELAY = 1000 // 1 second debounce
 
   private initialize() {
     if (this.initialized) return
@@ -137,15 +142,12 @@ class LocalChatStorageService {
       }
     })
 
-    // Save before unload
+    // Save before unload (immediate save)
     window.addEventListener('beforeunload', () => {
-      this.saveToStorage()
+      this.saveToStorage(true)
     })
-
-    // Periodic save (every 5 seconds)
-    setInterval(() => {
-      this.saveToStorage()
-    }, 5000)
+    
+    // NO interval here - we save on mutation with debounce
   }
 
   // Set current user ID (call this when user logs in)
@@ -203,6 +205,15 @@ class LocalChatStorageService {
         console.log(`📥 Loaded ${queueArray.length} items in sync queue`)
       }
 
+      // Load deleted chat IDs (prevents re-merging deleted chats)
+      const deletedJson = localStorage.getItem(this.getStorageKey(DELETED_CHATS_KEY))
+      if (deletedJson) {
+        const deletedArray: string[] = JSON.parse(deletedJson)
+        this.deletedChatIds.clear()
+        deletedArray.forEach(id => this.deletedChatIds.add(id))
+        console.log(`📥 Loaded ${deletedArray.length} deleted chat IDs`)
+      }
+
       this.emit('data-loaded', { 
         chatCount: this.chats.size, 
         messageCount: this.messages.size,
@@ -213,22 +224,51 @@ class LocalChatStorageService {
     }
   }
 
-  saveToStorage() {
-    try {
-      localStorage.setItem(
-        this.getStorageKey(CHATS_STORAGE_KEY),
-        JSON.stringify(Array.from(this.chats.values()))
-      )
-      localStorage.setItem(
-        this.getStorageKey(MESSAGES_STORAGE_KEY),
-        JSON.stringify(Array.from(this.messages.values()))
-      )
-      localStorage.setItem(
-        this.getStorageKey(SYNC_QUEUE_KEY),
-        JSON.stringify(Array.from(this.syncQueue.values()))
-      )
-    } catch (err) {
-      console.error('Failed to save to localStorage:', err)
+  // Saves to storage with debounce
+  // pass force=true to save immediately (e.g. beforeunload)
+  saveToStorage(force = false) {
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout)
+      this.saveTimeout = null
+    }
+
+    const doSave = () => {
+      try {
+        console.log('💾 Saving to localStorage...')
+        const start = performance.now()
+        
+        localStorage.setItem(
+          this.getStorageKey(CHATS_STORAGE_KEY),
+          JSON.stringify(Array.from(this.chats.values()))
+        )
+        // This is potentially large - eventually we should chunk usage
+        localStorage.setItem(
+          this.getStorageKey(MESSAGES_STORAGE_KEY),
+          JSON.stringify(Array.from(this.messages.values()))
+        )
+        localStorage.setItem(
+          this.getStorageKey(SYNC_QUEUE_KEY),
+          JSON.stringify(Array.from(this.syncQueue.values()))
+        )
+        // Save deleted chat IDs (prevents re-merging)
+        localStorage.setItem(
+          this.getStorageKey(DELETED_CHATS_KEY),
+          JSON.stringify(Array.from(this.deletedChatIds))
+        )
+        
+        const end = performance.now()
+        if (end - start > 50) {
+          console.warn(`⚠️ Slow storage save: ${(end - start).toFixed(2)}ms`)
+        }
+      } catch (err) {
+        console.error('Failed to save to localStorage:', err)
+      }
+    }
+
+    if (force) {
+      doSave()
+    } else {
+      this.saveTimeout = setTimeout(doSave, this.SAVE_DELAY)
     }
   }
 
@@ -319,18 +359,53 @@ class LocalChatStorageService {
     const chat = this.getChat(chatId)
     if (!chat) return false
 
-    // Delete all messages for this chat
-    const chatMessages = this.getMessagesForChat(chat.localId)
-    chatMessages.forEach(msg => this.messages.delete(msg.localId))
+    // Store remoteId before deletion for remote sync
+    const remoteId = chat.remoteId
 
-    // Delete the chat
+    // Add to deleted list to prevent re-merge (both local and remote IDs)
+    this.deletedChatIds.add(chat.localId)
+    if (remoteId) {
+      this.deletedChatIds.add(remoteId)
+    }
+
+    // Delete all messages for this chat from local storage
+    const chatMessages = this.getMessagesForChat(chat.localId)
+    chatMessages.forEach(msg => {
+      this.messages.delete(msg.localId)
+      this.syncQueue.delete(msg.localId)
+    })
+
+    // Delete the chat from local storage
     this.chats.delete(chat.localId)
     this.syncQueue.delete(chat.localId)
     this.saveToStorage()
     
-    this.emit('chat-deleted', { chatId, localId: chat.localId, remoteId: chat.remoteId })
+    this.emit('chat-deleted', { chatId, localId: chat.localId, remoteId })
+    
+    console.log(`🗑️ Deleted local chat: ${chat.localId}${remoteId ? ` (remote: ${remoteId})` : ''}`)
+
+    // Trigger remote deletion in background if the chat was synced
+    if (remoteId) {
+      this.deleteRemoteChat(remoteId).catch(err => {
+        console.warn('Failed to delete chat from remote:', err)
+      })
+    }
 
     return true
+  }
+
+  /**
+   * Delete a chat from the remote database
+   */
+  private async deleteRemoteChat(remoteId: string): Promise<void> {
+    try {
+      const { chatService } = await import('@/lib/appwrite/chat-service')
+      await chatService.deleteChat(remoteId)
+      console.log(`☁️ Deleted remote chat: ${remoteId}`)
+    } catch (err: any) {
+      // Don't throw - local deletion should still succeed
+      console.warn(`Failed to delete remote chat ${remoteId}:`, err?.message)
+    }
   }
 
   /**
@@ -342,10 +417,18 @@ class LocalChatStorageService {
     // Get all chats for this user
     const userChats = Array.from(this.chats.values()).filter(c => c.user_id === this.currentUserId)
     
+    // Collect remote IDs for background deletion
+    const remoteIds = userChats
+      .filter(chat => chat.remoteId)
+      .map(chat => chat.remoteId as string)
+    
     for (const chat of userChats) {
       // Delete all messages for this chat
       const chatMessages = this.getMessagesForChat(chat.localId)
-      chatMessages.forEach(msg => this.messages.delete(msg.localId))
+      chatMessages.forEach(msg => {
+        this.messages.delete(msg.localId)
+        this.syncQueue.delete(msg.localId)
+      })
       
       // Delete the chat
       this.chats.delete(chat.localId)
@@ -356,6 +439,26 @@ class LocalChatStorageService {
     this.emit('all-chats-deleted', { count: userChats.length })
     
     console.log(`🗑️ Deleted ${userChats.length} local chats`)
+    
+    // Trigger remote deletion in background
+    if (remoteIds.length > 0) {
+      this.deleteAllRemoteChats().catch(err => {
+        console.warn('Failed to delete all chats from remote:', err)
+      })
+    }
+  }
+
+  /**
+   * Delete all chats from the remote database
+   */
+  private async deleteAllRemoteChats(): Promise<void> {
+    try {
+      const { chatService } = await import('@/lib/appwrite/chat-service')
+      await chatService.deleteAllChats()
+      console.log('☁️ Deleted all remote chats')
+    } catch (err: any) {
+      console.warn('Failed to delete all remote chats:', err?.message)
+    }
   }
 
   // ============ Message Operations ============
@@ -500,7 +603,7 @@ class LocalChatStorageService {
 
     try {
       // Import chatService dynamically to avoid circular deps
-      const { chatService } = await import('@/lib/supabase/chat-service')
+      const { chatService } = await import('@/lib/appwrite/chat-service')
 
       // Sync chats first (messages depend on chats)
       const chatItems = Array.from(this.syncQueue.values()).filter(i => i.type === 'chat')
@@ -632,11 +735,11 @@ class LocalChatStorageService {
 
       const remoteMsg = await chatService.addMessage(
         remoteChatId,
-        msg.role,
-        msg.content,
-        msg.metadata,
-        msg.localId, // Use the local ID so we can match it later (may not be used if not UUID)
-        { queueOnFailure: false }
+        {
+          role: msg.role,
+          content: msg.content,
+          metadata: msg.metadata
+        }
       )
 
       // IMPORTANT: Update the message with the remote ID so we can match it later
@@ -670,13 +773,19 @@ class LocalChatStorageService {
   // ============ Merge with Remote Data ============
 
   /**
-   * Merge remote chats from Supabase with local chats
-   * This is called when Supabase data becomes available
+   * Merge remote chats from Appwrite with local chats
+   * This is called when Appwrite data becomes available
    */
   mergeRemoteChats(remoteChats: any[]): void {
     console.log(`🔀 Merging ${remoteChats.length} remote chats with local data`)
 
     for (const remote of remoteChats) {
+      // Skip if this chat was deleted locally (prevents re-merging)
+      if (this.deletedChatIds.has(remote.id)) {
+        console.log(`⏭️ Skipping deleted chat: ${remote.id}`)
+        continue
+      }
+
       // Check if we already have this chat locally (by remoteId)
       const existingLocal = Array.from(this.chats.values()).find(c => c.remoteId === remote.id)
       
@@ -696,6 +805,13 @@ class LocalChatStorageService {
       } else {
         // This is a remote-only chat (from another device or before local-first)
         const localId = `remote_${remote.id}`
+        
+        // Also check if local ID was deleted
+        if (this.deletedChatIds.has(localId)) {
+          console.log(`⏭️ Skipping deleted chat (local ID): ${localId}`)
+          continue
+        }
+        
         const newLocal: LocalChat = {
           id: remote.id,
           localId,
@@ -723,7 +839,7 @@ class LocalChatStorageService {
   }
 
   /**
-   * Merge remote messages from Supabase with local messages
+   * Merge remote messages from Appwrite with local messages
    */
   mergeRemoteMessages(chatId: string, remoteMessages: any[]): void {
     console.log(`🔀 Merging ${remoteMessages.length} remote messages for chat ${chatId}`)

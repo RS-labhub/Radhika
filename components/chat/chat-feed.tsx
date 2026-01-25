@@ -189,9 +189,8 @@ export function ChatFeed({
                                 currentMode.borderPixel,
                               )
                             : cn(
-                                "rounded-3xl bg-gradient-to-r text-white shadow-lg",
-                                currentMode.gradient,
-                                "text-white",
+                                "rounded-3xl text-white shadow-lg",
+                                `bg-gradient-to-r ${currentMode.gradient}`,
                               )
                           : isPixel
                             ? "pixel-tile text-[0.82rem] leading-relaxed text-slate-700 dark:text-slate-100"

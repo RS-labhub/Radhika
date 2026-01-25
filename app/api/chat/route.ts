@@ -1,5 +1,6 @@
 import { checkRateLimit, getRateLimitHeaders } from "@/lib/rate-limit"
-import { createServerSupabaseClient, createServiceRoleClient } from "@/lib/supabase/server"
+import { createServerAppwriteClient, createServiceClient, Query } from "@/lib/appwrite/server"
+import { APPWRITE_CONFIG } from "@/lib/appwrite/config"
 import { SYSTEM_PROMPTS, CORE_SYSTEM_PROMPT, CREATOR_BOYFRIEND_PROMPT } from "@/lib/chat/system-prompts"
 import { createPersonalizedPrompt, type UserGender, type UserAge } from "@/lib/chat/personalization"
 import { handleGeminiRequest } from "./providers/gemini"
@@ -14,42 +15,73 @@ export async function POST(req: Request) {
   try {
     console.log("=== Chat API Request Started ===")
 
-    // Check authentication and rate limiting
-    const supabase = await createServerSupabaseClient()
-    const serviceRole = createServiceRoleClient() // For checking reserved_emails
-    const { data: { user } } = await supabase.auth.getUser()
+    // Check authentication and rate limiting using Appwrite
+    const { account, databases, userId: cookieUserId } = await createServerAppwriteClient()
+    const serviceClient = createServiceClient()
+    
+    let user: { $id: string; email?: string } | null = null
+    try {
+      user = await account.get()
+    } catch {
+      // Not authenticated via session - check if we have user ID from cookie or header
+      const headerUserId = req.headers.get('x-user-id')
+      const fallbackUserId = headerUserId || cookieUserId
+      
+      if (fallbackUserId) {
+        try {
+          // Validate user exists using service client
+          const validatedUser = await serviceClient.users.get(fallbackUserId)
+          user = { $id: validatedUser.$id, email: validatedUser.email }
+        } catch {
+          // Invalid user ID, continue as guest
+        }
+      }
+    }
     
     // Get identifier for rate limiting (user ID or IP)
-    const identifier = user?.id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous"
+    const identifier = user?.$id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous"
     const isAuthenticated = !!user
 
     // Check whether this user is the reserved creator (server-side)
     let isCreator = false
-    if (user?.id) {
+    if (user?.$id) {
       try {
         const userEmail = user.email?.toLowerCase()
         
-        // Check reserved_emails table using service role (bypasses RLS)
-        const { data: reservedEmail } = await serviceRole
-          .from('reserved_emails')
-          .select('email')
-          .ilike('email', userEmail || '')
-          .single()
+        // Check reserved_emails collection using service client (bypasses permissions)
+        try {
+          const reservedEmails = await serviceClient.databases.listDocuments(
+            APPWRITE_CONFIG.databaseId,
+            APPWRITE_CONFIG.collections.reservedEmails,
+            [Query.equal('email', userEmail || '')]
+          )
+          
+          if (reservedEmails.documents.length > 0) {
+            isCreator = true
+          }
+        } catch {
+          // Reserved emails collection may not exist
+        }
         
         // Also check profile
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('is_creator')
-          .eq('id', user.id)
-          .single()
-
-        // User is creator if in reserved_emails OR profile.is_creator is true
-        isCreator = !!reservedEmail || (profile as any)?.is_creator === true
+        if (!isCreator) {
+          try {
+            const profiles = await databases.listDocuments(
+              APPWRITE_CONFIG.databaseId,
+              APPWRITE_CONFIG.collections.profiles,
+              [Query.equal('$id', user.$id)]
+            )
+            
+            if (profiles.documents.length > 0 && profiles.documents[0].is_creator) {
+              isCreator = true
+            }
+          } catch {
+            // Profile may not exist
+          }
+        }
         
         console.log('[chat] Creator check:', { 
           email: userEmail, 
-          hasReservedEmail: !!reservedEmail, 
-          profileIsCreator: (profile as any)?.is_creator,
           isCreator 
         })
       } catch (e) {
@@ -102,56 +134,58 @@ export async function POST(req: Request) {
 
     if (user) {
       try {
-        // Fetch user data (name, pet_name)
-        const { data: userData, error: userError } = await supabase
-          .from("users")
-          .select("display_name, pet_name")
-          .eq("id", user.id)
-          .single()
-
-        if (!userError && userData) {
-          userName = (userData as any).display_name
-          petName = (userData as any).pet_name
-        }
-
-        // Fallback to auth metadata or email if display_name is not set
-        if (!userName) {
-          // Try user_metadata first
-          userName = (user as any).user_metadata?.display_name || 
-                     (user as any).user_metadata?.name || 
-                     (user as any).user_metadata?.full_name
+        // Fetch user data (name, pet_name) from Appwrite
+        try {
+          const users = await databases.listDocuments(
+            APPWRITE_CONFIG.databaseId,
+            APPWRITE_CONFIG.collections.users,
+            [Query.equal('$id', user.$id)]
+          )
           
-          // If still no name, extract from email (e.g., "john.doe@example.com" -> "John Doe")
-          if (!userName && user.email) {
-            const emailName = user.email.split('@')[0]
-            // Convert "john.doe" or "john_doe" to "John Doe"
-            userName = emailName
-              .replace(/[._-]/g, ' ')
-              .split(' ')
-              .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-              .join(' ')
+          if (users.documents.length > 0) {
+            const userData = users.documents[0]
+            userName = userData.display_name
+            petName = userData.pet_name
           }
+        } catch {
+          // User document may not exist yet
         }
 
-        // Fetch user settings (gender, age, tone)
-        const { data: settingsData, error: settingsError } = await supabase
-          .from("user_settings")
-          .select("gender, age, personalization")
-          .eq("user_id", user.id)
-          .single()
+        // Fallback to email if display_name is not set
+        if (!userName && user.email) {
+          const emailName = user.email.split('@')[0]
+          // Convert "john.doe" or "john_doe" to "John Doe"
+          userName = emailName
+            .replace(/[._-]/g, ' ')
+            .split(' ')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+            .join(' ')
+        }
 
-        if (!settingsError && settingsData) {
-          dbGender = (settingsData as any).gender
-          dbAge = (settingsData as any).age
-          // Check if tone is in personalization JSONB
-          const personalization = (settingsData as any).personalization
-          if (personalization && typeof personalization === 'object' && personalization.tone) {
-            dbTone = personalization.tone
+        // Fetch user settings (gender, age, tone) from Appwrite
+        try {
+          const settings = await databases.listDocuments(
+            APPWRITE_CONFIG.databaseId,
+            APPWRITE_CONFIG.collections.userSettings,
+            [Query.equal('user_id', user.$id)]
+          )
+          
+          if (settings.documents.length > 0) {
+            const settingsData = settings.documents[0]
+            dbGender = settingsData.gender
+            dbAge = settingsData.age
+            // Check if tone is in personalization JSONB
+            const personalization = settingsData.personalization
+            if (personalization && typeof personalization === 'object' && personalization.tone) {
+              dbTone = personalization.tone
+            }
           }
+        } catch {
+          // Settings may not exist yet
         }
       } catch (err) {
         console.error("Failed to fetch user personalization:", err)
-        // Fallback to auth metadata even on error
+        // Fallback to email even on error
         if (!userName && user.email) {
           const emailName = user.email.split('@')[0]
           userName = emailName

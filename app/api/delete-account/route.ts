@@ -1,107 +1,130 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createServerSupabaseClient } from "../../../lib/supabase/server"
-import { createClient } from "@supabase/supabase-js"
-
-const AVATAR_BUCKET = process.env.NEXT_PUBLIC_SUPABASE_AVATAR_BUCKET || "avatars"
-
-function extractStoragePath(urlOrPath: string | null | undefined) {
-  if (!urlOrPath) return null
-  if (!urlOrPath.startsWith("http")) return urlOrPath
-  const signMatch = urlOrPath.match(/storage\/v1\/object\/sign\/[^/]+\/([^?]+)/)
-  if (signMatch?.[1]) return decodeURIComponent(signMatch[1])
-  const publicMatch = urlOrPath.match(/storage\/v1\/object\/public\/([^?]+)/)
-  if (publicMatch?.[1]) return decodeURIComponent(publicMatch[1])
-  // fallback: try to find /avatars/<path>
-  const avatarsIdx = urlOrPath.indexOf("/avatars/")
-  if (avatarsIdx !== -1) return urlOrPath.substring(avatarsIdx + 1)
-  return null
-}
+import { createServerAppwriteClient, createServiceClient, Query } from "../../../lib/appwrite/server"
+import { APPWRITE_CONFIG } from "../../../lib/appwrite/config"
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = (await createServerSupabaseClient()) as any
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!user) {
+    const { account } = await createServerAppwriteClient()
+    const serviceClient = createServiceClient()
+    
+    let user
+    try {
+      user = await account.get()
+    } catch {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    const hasServiceRole = !!process.env.SUPABASE_SERVICE_ROLE_KEY
-    let admin: ReturnType<typeof createClient> | null = null
-    if (hasServiceRole) {
-      admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
-    } else {
-      console.warn("SUPABASE_SERVICE_ROLE_KEY not provided; proceeding with best-effort app-data deletion only")
-    }
+    const userId = user.$id
 
-    const dbClient: any = admin ?? supabase
-
-    // 1) Fetch avatar path (may be storage path or public URL)
-    const { data: existingUser } = await dbClient
-      .from("users")
-      .select("avatar_url")
-      .eq("id", user.id)
-      .single()
-
-    const avatarPath = extractStoragePath(existingUser?.avatar_url)
-
-    // 2) Delete favorites for this user
+    // 1) Delete favorites for this user
     try {
-      await dbClient.from("favorites").delete().eq("user_id", user.id)
+      const favorites = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.favorites,
+        [Query.equal('user_id', userId), Query.limit(1000)]
+      )
+      for (const fav of favorites.documents) {
+        await serviceClient.databases.deleteDocument(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.favorites,
+          fav.$id
+        )
+      }
     } catch (err) {
       console.warn("Failed to delete favorites:", err)
     }
 
-    // 3) Delete chat profiles, chats and messages
+    // 2) Delete chat messages and chats
     try {
-      const { data: chatsData } = await dbClient.from("chats").select("id").eq("user_id", user.id)
-      const chatIds: string[] = (chatsData || []).map((c: any) => c.id)
-
-      if (chatIds.length > 0) {
-        await dbClient.from("chat_messages").delete().in("chat_id", chatIds)
-        await dbClient.from("chats").delete().in("id", chatIds)
+      const chats = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.chats,
+        [Query.equal('user_id', userId), Query.limit(1000)]
+      )
+      
+      for (const chat of chats.documents) {
+        // Delete messages for this chat
+        try {
+          const messages = await serviceClient.databases.listDocuments(
+            APPWRITE_CONFIG.databaseId,
+            APPWRITE_CONFIG.collections.chatMessages,
+            [Query.equal('chat_id', chat.$id), Query.limit(1000)]
+          )
+          for (const msg of messages.documents) {
+            await serviceClient.databases.deleteDocument(
+              APPWRITE_CONFIG.databaseId,
+              APPWRITE_CONFIG.collections.chatMessages,
+              msg.$id
+            )
+          }
+        } catch (e) {
+          console.warn("Failed to delete messages for chat:", chat.$id, e)
+        }
+        
+        // Delete the chat
+        await serviceClient.databases.deleteDocument(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.chats,
+          chat.$id
+        )
       }
     } catch (err) {
       console.warn("Failed to delete chats/messages:", err)
     }
 
-    // 4) Delete chat profiles and user settings
+    // 3) Delete chat profiles
     try {
-      await dbClient.from("chat_profiles").delete().eq("user_id", user.id)
+      const profiles = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.chatProfiles,
+        [Query.equal('user_id', userId), Query.limit(100)]
+      )
+      for (const profile of profiles.documents) {
+        await serviceClient.databases.deleteDocument(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.chatProfiles,
+          profile.$id
+        )
+      }
     } catch (err) {
       console.warn("Failed to delete chat_profiles:", err)
     }
+
+    // 4) Delete user settings
     try {
-      await dbClient.from("user_settings").delete().eq("user_id", user.id)
+      const settings = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.userSettings,
+        [Query.equal('user_id', userId)]
+      )
+      for (const setting of settings.documents) {
+        await serviceClient.databases.deleteDocument(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.userSettings,
+          setting.$id
+        )
+      }
     } catch (err) {
       console.warn("Failed to delete user_settings:", err)
     }
 
-    // 5) Delete the user row from users table
+    // 5) Delete the user document
     try {
-      await dbClient.from("users").delete().eq("id", user.id)
+      await serviceClient.databases.deleteDocument(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.users,
+        userId
+      )
     } catch (err) {
       console.warn("Failed to delete users row:", err)
     }
 
-    // 6) Remove avatar file from storage (best-effort)
-    if (avatarPath) {
-      try {
-        await dbClient.storage.from(AVATAR_BUCKET).remove([avatarPath])
-      } catch (err) {
-        console.warn("Failed to remove avatar from storage", err)
-      }
-    }
-
-    // 7) If we have a service role client, attempt to delete the Supabase auth user (admin)
-    if (admin) {
-      try {
-        // @ts-ignore - admin.auth.admin exists on service_role clients
-        await (admin.auth as any).admin.deleteUser(user.id)
-      } catch (err) {
-        console.error("Failed to delete auth user:", err)
-        // Continue - we've removed app data; admin deletion may fail if key lacks permission
-      }
+    // 6) Delete the Appwrite auth user
+    try {
+      await serviceClient.users.delete(userId)
+    } catch (err) {
+      console.error("Failed to delete auth user:", err)
+      // Continue - we've removed app data; admin deletion may fail
     }
 
     return NextResponse.json({ success: true })

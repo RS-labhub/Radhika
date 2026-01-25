@@ -2,7 +2,7 @@
 
 # RADHIKA - AI Chat Assistant
 
-A modern AI chat assistant built with Next.js 16, React 19, and Supabase. Features multiple LLM providers, image generation, voice interaction, and persistent chat history.
+A modern AI chat assistant built with Next.js 16, React 19, and Appwrite. Features multiple LLM providers, image generation, voice interaction, and persistent chat history.
 
 **Try now**: https://radhika-sharma.vercel.app
 
@@ -12,7 +12,7 @@ A modern AI chat assistant built with Next.js 16, React 19, and Supabase. Featur
 - **Multi-Provider LLM**: Groq, Gemini, OpenAI, Claude
 - **Image Generation**: Pollinations, DALL·E 3, Hugging Face, Free alternatives
 - **Voice**: Speech-to-text input & text-to-speech output
-- **Auth & Persistence**: Supabase auth with chat history & favorites
+- **Auth & Persistence**: Appwrite auth with chat history & favorites
 - **UI**: Light/dark themes, modern & pixel UI styles
 
 ## Quick Start

@@ -1,16 +1,18 @@
-import { createServerSupabaseClient, createServiceRoleClient } from '@/lib/supabase/server'
+import { NextRequest } from 'next/server'
+import { createServerAppwriteClient, createServiceClient, Query } from '@/lib/appwrite/server'
+import { APPWRITE_CONFIG } from '@/lib/appwrite/config'
+import { getAuthenticatedUser } from '@/lib/api-utils'
 
 /**
  * Debug endpoint to check creator status and reserved emails
  * Call this to see what's happening with your creator setup
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const supabase = (await createServerSupabaseClient()) as any
-    const serviceRole = createServiceRoleClient() // For querying reserved_emails (bypasses RLS)
+    const { account, userId } = await createServerAppwriteClient()
+    const serviceClient = createServiceClient()
 
-    const { data: { user } } = await supabase.auth.getUser()
-
+    const user = await getAuthenticatedUser(request, account, serviceClient, userId)
     if (!user) {
       return new Response(JSON.stringify({ error: 'Not authenticated' }), { 
         status: 401, 
@@ -20,46 +22,71 @@ export async function GET() {
 
     const userEmail = user.email?.toLowerCase()
 
-    // Check reserved_emails table using service role (bypasses RLS)
-    const { data: allReservedEmails, error: reservedListError } = await serviceRole
-      .from('reserved_emails')
-      .select('*')
+    // Check reserved_emails collection using service client
+    let allReservedEmails: any[] = []
+    let reservedListError = null
+    try {
+      const result = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.reservedEmails,
+        [Query.limit(100)]
+      )
+      allReservedEmails = result.documents
+    } catch (e: any) {
+      reservedListError = e?.message || String(e)
+    }
 
-    const { data: reservedEmail, error: reservedError } = await serviceRole
-      .from('reserved_emails')
-      .select('email')
-      .ilike('email', userEmail || '')
-      .single()
+    let reservedEmail = null
+    let reservedError = null
+    try {
+      const result = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.reservedEmails,
+        [Query.equal('email', userEmail || '')]
+      )
+      if (result.documents.length > 0) {
+        reservedEmail = result.documents[0]
+      }
+    } catch (e: any) {
+      reservedError = e?.message || String(e)
+    }
 
-    // Check profiles table
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single()
+    // Check profiles collection (use service client for consistent access)
+    let profile = null
+    let profileError = null
+    try {
+      const result = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.profiles,
+        [Query.equal('user_id', user.$id)]
+      )
+      if (result.documents.length > 0) {
+        profile = result.documents[0]
+      }
+    } catch (e: any) {
+      profileError = e?.message || String(e)
+    }
 
     const debugInfo = {
       currentUser: {
-        id: user.id,
+        id: user.$id,
         email: user.email,
         emailLower: userEmail,
       },
       reservedEmails: {
         all: allReservedEmails || [],
-        error: reservedListError?.message || null,
+        error: reservedListError,
         totalCount: allReservedEmails?.length || 0,
       },
       reservedEmailCheck: {
         found: !!reservedEmail,
         data: reservedEmail || null,
-        error: reservedError?.message || null,
-        errorCode: reservedError?.code || null,
+        error: reservedError,
       },
       profile: {
         exists: !!profile,
         data: profile || null,
-        error: profileError?.message || null,
-        errorCode: profileError?.code || null,
+        error: profileError,
       },
       isCreator: !!reservedEmail || profile?.is_creator === true,
       calculations: {
