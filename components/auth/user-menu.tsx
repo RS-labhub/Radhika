@@ -1,12 +1,13 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/contexts/auth-context"
 import { useFeatureAccess } from "@/hooks/use-feature-access"
+import { useAdminStatus } from "@/hooks/use-admin-status"
 import { Button } from "@/components/ui/button"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { UserAvatar } from "@/components/ui/avatar"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,17 +16,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Badge } from "@/components/ui/badge"
 import { 
-  User, 
   Settings, 
   LogOut, 
   LayoutDashboard, 
   Star,
   Crown,
-  LogIn
+  LogIn,
+  Shield
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+
+interface UserProfile {
+  display_name?: string | null
+  avatar_url?: string | null
+}
 
 interface UserMenuProps {
   isPixel?: boolean
@@ -33,9 +38,42 @@ interface UserMenuProps {
 }
 
 export function UserMenu({ isPixel = false, accentRingClass }: UserMenuProps) {
-  const { user, profile, signOut, isLoading } = useAuth()
-  const { isAuthenticated, isPremium, isAdmin } = useFeatureAccess()
+  const { user, signOut, isLoading } = useAuth()
+  const { isAuthenticated, isPremium, isAdmin: featureAdmin } = useFeatureAccess()
+  const { isAdmin: isReservedEmailAdmin } = useAdminStatus()
   const router = useRouter()
+  const [profile, setProfile] = useState<UserProfile | null>(null)
+
+  // Fetch profile data when user is authenticated
+  useEffect(() => {
+    const fetchProfile = async () => {
+      if (!user) {
+        setProfile(null)
+        return
+      }
+
+      try {
+        const response = await fetch("/api/users", {
+          credentials: 'include',
+          headers: {
+            'x-user-id': user.$id,
+          },
+        })
+        if (response.ok) {
+          const data = await response.json()
+          console.log("[UserMenu] Fetched profile data:", data.profile)
+          console.log("[UserMenu] Avatar URL:", data.profile?.avatar_url)
+          setProfile(data.profile)
+        } else {
+          console.error("[UserMenu] Failed to fetch profile, status:", response.status)
+        }
+      } catch (error) {
+        console.error("[UserMenu] Failed to fetch profile:", error)
+      }
+    }
+
+    fetchProfile()
+  }, [user])
 
   const handleSignOut = async () => {
     await signOut()
@@ -96,7 +134,6 @@ export function UserMenu({ isPixel = false, accentRingClass }: UserMenuProps) {
   const rawName = profile?.display_name || user?.email?.split("@")[0] || "User"
   const maxNameLen = 20
   const truncatedName = rawName.length > maxNameLen ? rawName.slice(0, maxNameLen) + "…" : rawName
-  const initials = rawName.slice(0, 2).toUpperCase()
 
   return (
     <DropdownMenu>
@@ -109,21 +146,15 @@ export function UserMenu({ isPixel = false, accentRingClass }: UserMenuProps) {
             accentRingClass
           )}
         >
-          <Avatar className={cn(
-            "h-9 w-9",
-            isPixel ? "pixel-avatar" : "ring-2 ring-white/50 dark:ring-slate-700/50"
-          )}>
-            <AvatarImage src={profile?.avatar_url || undefined} alt={rawName} />
-            <AvatarFallback className={cn(
-              "text-sm font-medium",
-              isPixel
-                ? "pixel-surface text-slate-700 dark:text-slate-200"
-                : "bg-gradient-to-br from-cyan-500 to-blue-600 text-white"
-            )}>
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          {(isPremium || isAdmin) && (
+          <UserAvatar
+            avatarUrl={profile?.avatar_url}
+            name={profile?.display_name}
+            email={user?.email}
+            size="sm"
+            isPixel={isPixel}
+            className="h-9 w-9"
+          />
+          {(isPremium || featureAdmin) && (
             <div className="absolute -top-1 -right-1">
               <Crown className="h-3.5 w-3.5 text-amber-500 fill-amber-500" />
             </div>
@@ -165,6 +196,18 @@ export function UserMenu({ isPixel = false, accentRingClass }: UserMenuProps) {
             <span>Settings</span>
           </Link>
         </DropdownMenuItem>
+        
+        {isReservedEmailAdmin && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem asChild>
+              <Link href="/admin" className="cursor-pointer text-cyan-600 dark:text-cyan-400">
+                <Shield className="mr-2 h-4 w-4" />
+                <span>Admin Panel</span>
+              </Link>
+            </DropdownMenuItem>
+          </>
+        )}
         
         <DropdownMenuSeparator />
         

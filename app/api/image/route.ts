@@ -1,7 +1,10 @@
 import { Buffer } from "node:buffer"
 import { NextRequest, NextResponse } from "next/server"
 import { checkRateLimit, getRateLimitHeaders } from "@/lib/rate-limit"
-import { createServerSupabaseClient } from "@/lib/supabase/server"
+import { createServerAppwriteClient } from "@/lib/appwrite/server"
+
+// Pollinations API key
+const POLLINATIONS_API_KEY = process.env.POLLINATIONS_API_KEY || ""
 
 interface ImageGenerationSize {
   id: string
@@ -27,13 +30,23 @@ interface ImageGenerationProvider {
 const IMAGE_PROVIDERS: Record<string, ImageGenerationProvider> = {
   pollinations_free: {
     id: "pollinations_free",
-    name: "AI Image Generator (Free)",
+    name: "AI Image Generator (Pollinations)",
     requiresKey: false,
     models: [
-      { id: "turbo", label: "Turbo (Fast Generation)" },
-      { id: "sdxl", label: "Higher Quality (SDXL, Slower)" },
+      { id: "flux", label: "Flux Schnell (Fast & Free)" },
+      { id: "zimage", label: "Z-Image Turbo (Realistic)" },
+      { id: "turbo", label: "SDXL Turbo (Fast)" },
+      { id: "klein", label: "FLUX.2 Klein 4B (NEW)" },
+      { id: "klein-large", label: "FLUX.2 Klein 9B (NEW)" },
+      { id: "gptimage", label: "GPT Image 1 Mini" },
+      { id: "seedream", label: "Seedream 4.0" },
+      { id: "kontext", label: "FLUX.1 Kontext" },
+      { id: "nanobanana", label: "NanoBanana" },
+      { id: "seedream-pro", label: "Seedream 4.5 Pro" },
+      { id: "gptimage-large", label: "GPT Image 1.5" },
+      { id: "nanobanana-pro", label: "NanoBanana Pro" },
     ],
-    defaultModel: "turbo",
+    defaultModel: "flux",
     sizes: [
       { id: "post", label: "X/Twitter Post (1200x675)", width: 1200, height: 675 },
       { id: "square_small", label: "Square (512x512)", width: 512, height: 512 },
@@ -123,44 +136,45 @@ async function generateFreeAlternatives(
 ): Promise<{ imageUrl: string; credits: number; model: string }> {
   const chosenModel = model || "flux"
 
+  // Build the API key query parameter if available
+  // Pollinations uses 'key' parameter for authentication
+  const apiKeyParam = POLLINATIONS_API_KEY ? `&key=${POLLINATIONS_API_KEY}` : ""
+  
+  // Log for debugging
+  console.log(`🎨 Pollinations request: model=${chosenModel}, size=${width}x${height}, hasApiKey=${!!POLLINATIONS_API_KEY}`)
+
   const services = [
     {
-      name: "Pollinations AI",
+      name: "Pollinations Gen API",
       generateUrl: () => {
         const encodedPrompt = encodeURIComponent(prompt)
         const seed = Math.floor(Math.random() * 1_000_000)
-        const pollinationModel =
-          chosenModel === "flux" ? "flux" : chosenModel === "sdxl" ? "dreamshaper" : "turbo"
-        return `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&model=${pollinationModel}&enhance=true`
+        // New unified API endpoint
+        const url = `https://gen.pollinations.ai/image/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&model=${chosenModel}&enhance=true${apiKeyParam}`
+        console.log(`🔗 Gen Pollinations URL: ${url.substring(0, 200)}...`)
+        return url
       },
       isDirect: true,
     },
     {
-      name: "ImgGen AI",
+      name: "Pollinations Image API",
       generateUrl: () => {
         const encodedPrompt = encodeURIComponent(prompt)
-        return `https://api.limewire.com/api/image/generation?prompt=${encodedPrompt}&aspect_ratio=${width}:${height}`
+        const seed = Math.floor(Math.random() * 1_000_000)
+        // Legacy endpoint
+        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&model=${chosenModel}&enhance=true${apiKeyParam}`
+        console.log(`🔗 Image Pollinations URL: ${url.substring(0, 200)}...`)
+        return url
       },
       isDirect: true,
-      requiresPost: true,
-    },
-    {
-      name: "Replicate Flux Schnell",
-      generateUrl: () => {
-        const encodedPrompt = encodeURIComponent(prompt)
-        return `https://fal.ai/api/v1/run/fal-ai/flux/schnell?prompt=${encodedPrompt}&image_size=${width}x${height}`
-      },
-      isDirect: true,
-      isBackup: true,
     },
   ] as const
 
   for (const service of services) {
     try {
-      console.log(`Trying ${service.name} with model: ${chosenModel}...`)
+      console.log(`🚀 Trying ${service.name} with model: ${chosenModel}...`)
 
-      const requiresPost = "requiresPost" in service && Boolean((service as any).requiresPost)
-      if (service.isDirect && !requiresPost) {
+      if (service.isDirect) {
         const url = service.generateUrl()
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error("Request timeout")), 30_000),
@@ -178,75 +192,36 @@ async function generateFreeAlternatives(
 
         const response = (await Promise.race([fetchPromise, timeoutPromise])) as Response
 
+        console.log(`📡 ${service.name} response: ${response.status} ${response.statusText}`)
+
         if (!response.ok) {
-          console.error(`${service.name} error: ${response.status} ${response.statusText}`)
+          console.error(`❌ ${service.name} error: ${response.status} ${response.statusText}`)
           continue
         }
 
         const contentType = response.headers.get("content-type")
+        console.log(`📦 ${service.name} content-type: ${contentType}`)
+
         if (!contentType || !contentType.startsWith("image/")) {
-          console.error(`${service.name} returned non-image content: ${contentType}`)
+          console.error(`❌ ${service.name} returned non-image content: ${contentType}`)
           continue
         }
 
         const contentLength = response.headers.get("content-length")
         if (contentLength && Number.parseInt(contentLength, 10) < 1000) {
-          console.error(`${service.name} returned suspiciously small image: ${contentLength} bytes`)
+          console.error(`❌ ${service.name} returned suspiciously small image: ${contentLength} bytes`)
           continue
         }
 
+        console.log(`✅ ${service.name} SUCCESS! Image ready.`)
         return {
           imageUrl: url,
           credits: 0,
           model: chosenModel,
         }
       }
-
-      // Some providers are "direct" but require POST to kick off generation.
-      // We still return a URL we can display if the API responds with one.
-      if (service.isDirect && requiresPost) {
-        const url = service.generateUrl()
-
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Request timeout")), 30_000),
-        )
-
-        const fetchPromise = fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            Accept: "application/json,*/*",
-          },
-          body: JSON.stringify({ prompt, width, height, model: chosenModel }),
-        })
-
-        const response = (await Promise.race([fetchPromise, timeoutPromise])) as Response
-
-        if (!response.ok) {
-          const text = await response.text().catch(() => "")
-          console.error(`${service.name} error: ${response.status} ${response.statusText} ${text}`)
-          continue
-        }
-
-        const data = (await response.json().catch(() => null)) as any
-        const imageUrl =
-          data?.imageUrl || data?.url || data?.data?.[0]?.url || data?.result?.url || data?.result
-
-        if (!imageUrl || typeof imageUrl !== "string") {
-          console.error(`${service.name} returned no usable image URL`)
-          continue
-        }
-
-        return {
-          imageUrl,
-          credits: 0,
-          model: chosenModel,
-        }
-      }
     } catch (error) {
-      console.error(`${service.name} failed:`, error)
+      console.error(`❌ ${service.name} failed:`, error)
       continue
     }
   }
@@ -262,31 +237,48 @@ async function generateFreeImage(
   width: number,
   height: number,
 ): Promise<{ imageUrl: string; credits: number; model: string }> {
-  const chosenModel = model || "turbo"
+  const chosenModel = model || "flux"
 
-  const modelMapping: Record<string, string> = {
-    turbo: "turbo",
-    sdxl: "dreamshaper",
-  }
+  // Build the API key query parameter if available
+  // Pollinations uses 'key' parameter for authentication
+  const apiKeyParam = POLLINATIONS_API_KEY ? `&key=${POLLINATIONS_API_KEY}` : ""
+  
+  // Log for debugging
+  console.log(`🎨 Free image request: model=${chosenModel}, size=${width}x${height}, hasApiKey=${!!POLLINATIONS_API_KEY}`)
 
-  const pollinationModel = modelMapping[chosenModel] || "turbo"
-
+  // Try the new unified gen.pollinations.ai endpoint first, then fallback to image.pollinations.ai
   const services = [
     {
-      name: "Pollinations AI",
+      name: "Pollinations Gen API",
       generateUrl: () => {
         const encodedPrompt = encodeURIComponent(prompt)
         const seed = Math.floor(Math.random() * 1_000_000)
-        return `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&model=${pollinationModel}&enhance=true&safe=true`
+        // New unified API: https://gen.pollinations.ai/image/PROMPT?width=X&height=Y&model=MODEL
+        const url = `https://gen.pollinations.ai/image/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&model=${chosenModel}&enhance=true&safe=true${apiKeyParam}`
+        console.log(`🔗 Gen Pollinations URL: ${url.substring(0, 200)}...`)
+        return url
       },
       isDirect: true,
     },
     {
-      name: "Pollinations AI (Backup)",
+      name: "Pollinations Image API",
       generateUrl: () => {
         const encodedPrompt = encodeURIComponent(prompt)
         const seed = Math.floor(Math.random() * 1_000_000)
-        return `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true`
+        // Legacy image.pollinations.ai endpoint
+        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true&model=${chosenModel}&enhance=true&safe=true${apiKeyParam}`
+        console.log(`🔗 Image Pollinations URL: ${url.substring(0, 200)}...`)
+        return url
+      },
+      isDirect: true,
+    },
+    {
+      name: "Pollinations Backup (no model)",
+      generateUrl: () => {
+        const encodedPrompt = encodeURIComponent(prompt)
+        const seed = Math.floor(Math.random() * 1_000_000)
+        // Fallback without model parameter
+        return `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&seed=${seed}&nologo=true${apiKeyParam}`
       },
       isDirect: true,
     },
@@ -294,12 +286,12 @@ async function generateFreeImage(
 
   for (const service of services) {
     try {
-      console.log(`Trying ${service.name} with model: ${chosenModel} (mapped to: ${pollinationModel})...`)
+      console.log(`🚀 Trying ${service.name} with model: ${chosenModel}...`)
 
       if (service.isDirect) {
         const url = service.generateUrl()
         const abortController = new AbortController()
-        const timeout = setTimeout(() => abortController.abort(), 20_000)
+        const timeout = setTimeout(() => abortController.abort(), 30_000)
 
         let response: Response
         try {
@@ -316,7 +308,7 @@ async function generateFreeImage(
           })
         } catch (err) {
           if (err instanceof DOMException && err.name === "AbortError") {
-            console.warn(`${service.name} request timed out`)
+            console.warn(`⏱️ ${service.name} request timed out`)
             continue
           }
           throw err
@@ -324,23 +316,28 @@ async function generateFreeImage(
           clearTimeout(timeout)
         }
 
+        console.log(`📡 ${service.name} response: ${response.status} ${response.statusText}`)
+
         if (!response.ok) {
-          console.error(`${service.name} error: ${response.status} ${response.statusText}`)
+          console.error(`❌ ${service.name} error: ${response.status} ${response.statusText}`)
           continue
         }
 
         const contentType = response.headers.get("content-type")
+        console.log(`📦 ${service.name} content-type: ${contentType}`)
+        
         if (!contentType || !contentType.startsWith("image/")) {
-          console.error(`${service.name} returned non-image content: ${contentType}`)
+          console.error(`❌ ${service.name} returned non-image content: ${contentType}`)
           continue
         }
 
         const contentLength = response.headers.get("content-length")
         if (contentLength && Number.parseInt(contentLength, 10) < 1000) {
-          console.error(`${service.name} returned suspiciously small image: ${contentLength} bytes`)
+          console.error(`❌ ${service.name} returned suspiciously small image: ${contentLength} bytes`)
           continue
         }
 
+        console.log(`✅ ${service.name} SUCCESS! Image ready.`)
         return {
           imageUrl: url,
           credits: 0,
@@ -348,12 +345,12 @@ async function generateFreeImage(
         }
       }
     } catch (error) {
-      console.error(`${service.name} failed:`, error)
+      console.error(`❌ ${service.name} failed:`, error)
       continue
     }
   }
 
-  console.warn("All free image generation services failed")
+  console.warn("⚠️ All free image generation services failed")
   throw new Error(
     "All free image generation services are currently unavailable. Please try again later or use a different provider.",
   )
@@ -660,12 +657,18 @@ function generatePromptFromContent(
 
 export async function POST(req: NextRequest) {
   try {
-    // Check authentication and rate limiting
-    const supabase = await createServerSupabaseClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    // Check authentication and rate limiting using Appwrite
+    const { account } = await createServerAppwriteClient()
+    
+    let user: { $id: string } | null = null
+    try {
+      user = await account.get()
+    } catch {
+      // Not authenticated - continue as guest
+    }
     
     // Get identifier for rate limiting (user ID or IP)
-    const identifier = user?.id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous"
+    const identifier = user?.$id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous"
     const isAuthenticated = !!user
 
     // Check rate limit
@@ -734,7 +737,11 @@ export async function POST(req: NextRequest) {
 
     if (provider === "pollinations_free") {
       const selectedModel = model || selectedProvider.defaultModel
-      console.log(`Generating image with pollinations_free: ${selectedModel}, ${selectedSize.width}x${selectedSize.height}`)
+      console.log(`🎨 Generating image with pollinations_free:`)
+      console.log(`  - Model: ${selectedModel}`)
+      console.log(`  - Size: ${selectedSize.width}x${selectedSize.height}`)
+      console.log(`  - API Key configured: ${!!POLLINATIONS_API_KEY}`)
+      console.log(`  - Prompt (truncated): ${prompt.substring(0, 100)}...`)
 
       result = await generateFreeImage(prompt, selectedModel!, selectedSize.width, selectedSize.height)
     } else if (provider === "free_alternatives") {

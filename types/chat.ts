@@ -89,10 +89,13 @@ export interface Chat {
 	profile_id?: string
 	mode: Mode
 	title: string
+	message_count?: number
+	last_message_preview?: string
 	created_at: string
 	updated_at: string
 	last_message_at?: string
 	is_archived: boolean
+	deleted_at?: string
 	is_public?: boolean
 	share_token?: string
 	shared_at?: string
@@ -104,13 +107,22 @@ export interface ChatMessage {
 	role: "user" | "assistant" | "system"
 	content: string
 	metadata?: Record<string, any>
+	sources?: Source[]
 	created_at: string
 	is_favorite: boolean
+}
+
+export interface Source {
+	title: string
+	url: string
+	type?: "documentation" | "wikipedia" | "article" | "other"
+	snippet?: string
 }
 
 export interface Favorite {
 	id: string
 	user_id: string
 	message_id: string
+	chat_id?: string
 	created_at: string
 }

@@ -3,10 +3,10 @@
  * 
  * This service implements a local-first approach where:
  * 1. ALL favorites are stored in localStorage FIRST
- * 2. Sync to Supabase happens in the background (non-blocking)
+ * 2. Sync to Appwrite happens in the background (non-blocking)
  * 3. Favorites list is always available from localStorage
  * 4. No loading states that block the UI
- * 5. Graceful merge when Supabase data becomes available
+ * 5. Graceful merge when Appwrite data becomes available
  */
 
 import type { Mode } from '@/types/chat'
@@ -14,11 +14,11 @@ import type { Mode } from '@/types/chat'
 export interface LocalFavorite {
   id: string
   localId: string
-  remoteId?: string // Supabase favorites table ID once synced
+  remoteId?: string // Appwrite favorites table ID once synced
   messageId: string // Local message ID
-  remoteMessageId?: string // Supabase message ID
+  remoteMessageId?: string // Appwrite message ID
   chatId: string // Local chat ID
-  remoteChatId?: string // Supabase chat ID
+  remoteChatId?: string // Appwrite chat ID
   content: string
   role: 'user' | 'assistant' | 'system'
   mode?: Mode
@@ -480,7 +480,7 @@ class LocalFavoritesStorageService {
       } else {
         // Message not synced yet - this is NORMAL for local-first
         // Return false to keep in queue and retry later
-        console.log('⏳ [Favorites] Message not synced to Supabase yet, will retry later:', favorite.messageId)
+        console.log('⏳ [Favorites] Message not synced to Appwrite yet, will retry later:', favorite.messageId)
         return false
       }
     }
@@ -490,7 +490,11 @@ class LocalFavoritesStorageService {
     // Use the API route to add favorite
     const response = await fetch('/api/favorites', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      headers: { 
+        'Content-Type': 'application/json',
+        ...(this.currentUserId ? { 'x-user-id': this.currentUserId } : {}),
+      },
       body: JSON.stringify({ messageId: remoteMessageId }),
     })
 
@@ -527,6 +531,10 @@ class LocalFavoritesStorageService {
 
     const response = await fetch(`/api/favorites?messageId=${remoteMessageId}`, {
       method: 'DELETE',
+      credentials: 'include',
+      headers: {
+        ...(this.currentUserId ? { 'x-user-id': this.currentUserId } : {}),
+      },
     })
 
     if (!response.ok && response.status !== 404) {
@@ -540,7 +548,7 @@ class LocalFavoritesStorageService {
   // ============ Remote Data Merge ============
 
   /**
-   * Merge favorites from Supabase (called after fetching from server)
+   * Merge favorites from Appwrite (called after fetching from server)
    * Deduplicates by content+role to avoid showing duplicate messages
    */
   mergeRemoteFavorites(remoteFavorites: Array<{

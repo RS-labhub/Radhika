@@ -41,7 +41,8 @@ export default function SignupPage() {
     setIsLoading(true)
 
     try {
-      const { error } = await signUp(email, password, displayName || undefined)
+      const result = await signUp(email, password, displayName || undefined)
+      const error = result?.error
       if (error) {
         setError(error.message)
       } else {

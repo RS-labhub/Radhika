@@ -47,7 +47,7 @@ export function MessageActions({ messageId, content, isFavorite = false, onFavor
     // The onFavoriteChange callback in page.tsx handles:
     // 1. Updating local UI state (messages array)
     // 2. Adding/removing from localFavoritesStorage
-    // 3. Background sync to Supabase
+    // 3. Background sync to Appwrite
     if (!onFavoriteChange) return
     
     setIsTogglingFavorite(true)

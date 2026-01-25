@@ -1,48 +1,99 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createServerSupabaseClient } from "../../../lib/supabase/server"
-import { robustQuery, errorResponse, successResponse, CACHE_HEADERS } from "../../../lib/api-utils"
+import { createServerAppwriteClient, createServiceClient, Query } from "../../../lib/appwrite/server"
+import { APPWRITE_CONFIG } from "../../../lib/appwrite/config"
+import { errorResponse, successResponse, CACHE_HEADERS } from "../../../lib/api-utils"
+import { ID, Permission, Role } from "node-appwrite"
 
-// GET /api/favorites - Get all favorite messages
+// Helper to get user from session or header
+async function getUser(request: NextRequest, account: any, serviceClient: any) {
+  try {
+    return await account.get()
+  } catch (error: any) {
+    // Try to get user ID from header as fallback
+    const userIdHeader = request.headers.get('x-user-id')
+    if (userIdHeader) {
+      try {
+        return await serviceClient.users.get(userIdHeader)
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+}
+
+// GET /api/favorites - Get all favorite messages for the user
 export async function GET(request: NextRequest) {
   try {
-    const supabase = (await createServerSupabaseClient()) as any
+    const { account } = await createServerAppwriteClient()
+    const serviceClient = createServiceClient()
     
-    const authResult: any = await robustQuery(
-      () => supabase.auth.getUser(),
-      { timeout: 5000, operationName: "Auth check" }
-    )
-
-    if (authResult.error || !authResult.data?.user) {
+    // Get user
+    const user = await getUser(request, account, serviceClient)
+    if (!user) {
       return errorResponse("Unauthorized", 401)
     }
 
-    const user = authResult.data.user
-
-    // Get all favorite messages with chat info (optimized query)
-    const result: any = await robustQuery(
-      () => supabase
-        .from("chat_messages")
-        .select(`
-          id, content, role, created_at, is_favorite,
-          chat:chats!inner(
-            id,
-            title,
-            mode,
-            user_id
-          )
-        `)
-        .eq("is_favorite", true)
-        .eq("chat.user_id", user.id)
-        .order("created_at", { ascending: false })
-        .limit(100), // Limit results
-      { timeout: 8000, operationName: "Fetch favorites" }
+    // Get all favorites for this user using service client
+    const favoritesResult = await serviceClient.databases.listDocuments(
+      APPWRITE_CONFIG.databaseId,
+      APPWRITE_CONFIG.collections.favorites,
+      [
+        Query.equal("user_id", user.$id),
+        Query.orderDesc("created_at"),
+        Query.limit(100),
+      ]
     )
 
-    if (result.error) {
-      throw result.error
-    }
+    // Get the associated messages using service client
+    const favorites = await Promise.all(
+      favoritesResult.documents.map(async (fav: any) => {
+        try {
+          const message = await serviceClient.databases.getDocument(
+            APPWRITE_CONFIG.databaseId,
+            APPWRITE_CONFIG.collections.chatMessages,
+            fav.message_id
+          )
 
-    const response = successResponse({ favorites: result.data || [] })
+          // Get the chat info
+          let chat = null
+          try {
+            chat = await serviceClient.databases.getDocument(
+              APPWRITE_CONFIG.databaseId,
+              APPWRITE_CONFIG.collections.chats,
+              message.chat_id
+            )
+          } catch (err) {
+            console.error("Failed to fetch chat for favorite:", err)
+          }
+
+          return {
+            id: fav.$id,
+            message_id: fav.message_id,
+            user_id: fav.user_id,
+            created_at: fav.created_at || fav.$createdAt,
+            message: {
+              id: message.$id,
+              content: message.content,
+              role: message.role,
+              created_at: message.created_at || message.$createdAt,
+              chat: chat ? {
+                id: chat.$id,
+                title: chat.title,
+                mode: chat.mode,
+              } : null,
+            },
+          }
+        } catch (err) {
+          console.error("Failed to fetch message for favorite:", err)
+          return null
+        }
+      })
+    )
+
+    const response = successResponse({ 
+      favorites: favorites.filter((f: any) => f !== null) 
+    })
     Object.entries(CACHE_HEADERS.noCache).forEach(([key, value]) => {
       response.headers.set(key, value)
     })
@@ -62,87 +113,91 @@ export async function GET(request: NextRequest) {
 // POST /api/favorites - Add a message to favorites
 export async function POST(request: NextRequest) {
   try {
-    const supabase = (await createServerSupabaseClient()) as any
+    const { account } = await createServerAppwriteClient()
+    const serviceClient = createServiceClient()
+    const { databases } = serviceClient // Use service client for creation
     
-    const authResult: any = await robustQuery(
-      () => supabase.auth.getUser(),
-      { timeout: 5000, operationName: "Auth check" }
-    )
-
-    if (authResult.error || !authResult.data?.user) {
+    // Get user
+    const user = await getUser(request, account, serviceClient)
+    if (!user) {
       return errorResponse("Unauthorized", 401)
     }
 
-    const user = authResult.data.user
-
     const body = await request.json()
-    const { messageId } = body
+    const { messageId, chatId } = body
 
     if (!messageId) {
       return errorResponse("Message ID is required", 400)
     }
 
-    // Verify the message belongs to a chat owned by the user
-    const messageCheck: any = await robustQuery(
-      () => supabase
-        .from("chat_messages")
-        .select(`
-          id,
-          chat_id,
-          chat:chats!inner(user_id)
-        `)
-        .eq("id", messageId)
-        .eq("chat.user_id", user.id)
-        .single(),
-      { timeout: 5000, operationName: "Verify message ownership" }
-    )
+    // Verify the message exists and belongs to user's chat
+    try {
+      const message = await databases.getDocument(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.chatMessages,
+        messageId
+      )
 
-    if (messageCheck.error || !messageCheck.data) {
+      const chat = await databases.getDocument(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.chats,
+        message.chat_id
+      )
+
+      if (chat.user_id !== user.$id) {
+        return errorResponse("Unauthorized to favorite this message", 403)
+      }
+    } catch (error) {
       return errorResponse("Message not found", 404)
     }
 
-    // Insert into favorites table (upsert to handle duplicates)
-    const favoriteResult: any = await robustQuery(
-      () => supabase
-        .from("favorites")
-        .upsert({
-          user_id: user.id,
-          message_id: messageId,
-          chat_id: messageCheck.data.chat_id,
-        }, { onConflict: 'user_id,message_id' })
-        .select()
-        .single(),
-      { timeout: 5000, operationName: "Add to favorites table" }
+    // Check if already favorited
+    const existing = await databases.listDocuments(
+      APPWRITE_CONFIG.databaseId,
+      APPWRITE_CONFIG.collections.favorites,
+      [
+        Query.equal("user_id", user.$id),
+        Query.equal("message_id", messageId),
+        Query.limit(1),
+      ]
     )
 
-    if (favoriteResult.error) {
-      console.error("Error inserting into favorites table:", favoriteResult.error)
-      // Continue anyway - the main thing is updating is_favorite flag
+    if (existing.documents.length > 0) {
+      return errorResponse("Message already favorited", 400)
     }
 
-    // Also update message to be favorite (for backward compatibility)
-    const result: any = await robustQuery(
-      () => supabase
-        .from("chat_messages")
-        .update({ is_favorite: true })
-        .eq("id", messageId)
-        .select()
-        .single(),
-      { timeout: 5000, operationName: "Add favorite" }
+    // Create favorite with permissions
+    const favorite = await databases.createDocument(
+      APPWRITE_CONFIG.databaseId,
+      APPWRITE_CONFIG.collections.favorites,
+      ID.unique(),
+      {
+        user_id: user.$id,
+        message_id: messageId,
+        chat_id: chatId || null,
+        created_at: new Date().toISOString(),
+      },
+      [
+        Permission.read(Role.user(user.$id)),
+        Permission.update(Role.user(user.$id)),
+        Permission.delete(Role.user(user.$id)),
+      ]
     )
 
-    if (result.error) {
-      throw result.error
-    }
+    // Update message to mark as favorite
+    await databases.updateDocument(
+      APPWRITE_CONFIG.databaseId,
+      APPWRITE_CONFIG.collections.chatMessages,
+      messageId,
+      { is_favorite: true }
+    )
 
-    return successResponse({ favorite: favoriteResult.data || result.data })
+    return successResponse({ favorite }, 201)
   } catch (error: any) {
     console.error("Error adding favorite:", error)
     return errorResponse(
-      error.message?.includes("timed out") 
-        ? "Request timed out. Please try again." 
-        : "Failed to add favorite",
-      error.message?.includes("timed out") ? 504 : 500
+      error.message || "Failed to add favorite",
+      500
     )
   }
 }
@@ -150,63 +205,86 @@ export async function POST(request: NextRequest) {
 // DELETE /api/favorites - Remove a message from favorites
 export async function DELETE(request: NextRequest) {
   try {
-    const supabase = (await createServerSupabaseClient()) as any
+    const { account } = await createServerAppwriteClient()
+    const serviceClient = createServiceClient()
+    const { databases } = serviceClient // Use service client for deletion
     
-    const authResult: any = await robustQuery(
-      () => supabase.auth.getUser(),
-      { timeout: 5000, operationName: "Auth check" }
-    )
-
-    if (authResult.error || !authResult.data?.user) {
+    // Get user
+    const user = await getUser(request, account, serviceClient)
+    if (!user) {
       return errorResponse("Unauthorized", 401)
     }
 
-    const user = authResult.data.user
-
-    const searchParams = request.nextUrl.searchParams
+    const { searchParams } = new URL(request.url)
     const messageId = searchParams.get("messageId")
+    const favoriteId = searchParams.get("favoriteId")
 
-    if (!messageId) {
-      return errorResponse("Message ID is required", 400)
+    if (!messageId && !favoriteId) {
+      return errorResponse("Message ID or Favorite ID is required", 400)
     }
 
-    // Delete from favorites table first
-    const deleteResult: any = await robustQuery(
-      () => supabase
-        .from("favorites")
-        .delete()
-        .eq("user_id", user.id)
-        .eq("message_id", messageId),
-      { timeout: 5000, operationName: "Delete from favorites table" }
-    )
+    // Find the favorite
+    let favoriteToDelete: any
+    if (favoriteId) {
+      try {
+        favoriteToDelete = await databases.getDocument(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.favorites,
+          favoriteId
+        )
+        
+        if (favoriteToDelete.user_id !== user.$id) {
+          return errorResponse("Unauthorized", 403)
+        }
+      } catch (error) {
+        return errorResponse("Favorite not found", 404)
+      }
+    } else if (messageId) {
+      const result = await databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.favorites,
+        [
+          Query.equal("user_id", user.$id),
+          Query.equal("message_id", messageId),
+          Query.limit(1),
+        ]
+      )
 
-    if (deleteResult.error) {
-      console.error("Error deleting from favorites table:", deleteResult.error)
-      // Continue anyway
+      if (result.documents.length === 0) {
+        return errorResponse("Favorite not found", 404)
+      }
+
+      favoriteToDelete = result.documents[0]
     }
 
-    // Also update message to remove favorite flag (for backward compatibility)
-    const result: any = await robustQuery(
-      () => supabase
-        .from("chat_messages")
-        .update({ is_favorite: false })
-        .eq("id", messageId),
-      { timeout: 5000, operationName: "Remove favorite" }
+    // Delete the favorite
+    await databases.deleteDocument(
+      APPWRITE_CONFIG.databaseId,
+      APPWRITE_CONFIG.collections.favorites,
+      favoriteToDelete.$id
     )
 
-    if (result.error) {
-      // Non-critical error, just log
-      console.error("Error updating is_favorite:", result.error)
+    // Update message to mark as not favorite
+    if (favoriteToDelete.message_id) {
+      try {
+        await databases.updateDocument(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.chatMessages,
+          favoriteToDelete.message_id,
+          { is_favorite: false }
+        )
+      } catch (err) {
+        // Non-fatal
+        console.error("Failed to update message favorite status:", err)
+      }
     }
 
     return successResponse({ success: true })
   } catch (error: any) {
     console.error("Error removing favorite:", error)
     return errorResponse(
-      error.message?.includes("timed out") 
-        ? "Request timed out. Please try again." 
-        : "Failed to remove favorite",
-      error.message?.includes("timed out") ? 504 : 500
+      error.message || "Failed to remove favorite",
+      500
     )
   }
 }

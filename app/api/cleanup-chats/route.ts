@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
-import { createClient } from "@supabase/supabase-js"
+import { createServiceClient, Query } from "@/lib/appwrite/server"
+import { APPWRITE_CONFIG } from "@/lib/appwrite/config"
 
 /**
  * API endpoint to clean up old deleted chats, sessions, and stale data
@@ -20,42 +21,158 @@ export async function GET(request: Request) {
       )
     }
 
-    // Create admin client for cleanup operations
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-    
-    if (!supabaseUrl || !supabaseServiceKey) {
-      return NextResponse.json(
-        { error: "Missing Supabase configuration" },
-        { status: 500 }
-      )
-    }
-    
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
+    // Create service client for cleanup operations
+    const serviceClient = createServiceClient()
     
     // Check if full cleanup is requested (weekly)
     const url = new URL(request.url)
     const fullCleanup = url.searchParams.get("full") === "true"
     
-    // Run the comprehensive cleanup function
-    const { data, error } = await supabase.rpc("run_scheduled_cleanup")
-    
-    if (error) {
-      console.error("Cleanup RPC error:", error)
+    const results: Record<string, number> = {}
+
+    // 1. Delete soft-deleted chats older than 2 days
+    try {
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+      const deletedChats = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.chats,
+        [
+          Query.isNotNull('deleted_at'),
+          Query.lessThan('deleted_at', twoDaysAgo),
+          Query.limit(100)
+        ]
+      )
       
-      // Fallback to manual cleanup if RPC doesn't exist
-      if (error.code === "42883") {
-        return await runManualCleanup(supabase, fullCleanup)
+      for (const chat of deletedChats.documents) {
+        // Delete messages for this chat
+        const messages = await serviceClient.databases.listDocuments(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.chatMessages,
+          [Query.equal('chat_id', chat.$id), Query.limit(1000)]
+        )
+        for (const msg of messages.documents) {
+          await serviceClient.databases.deleteDocument(
+            APPWRITE_CONFIG.databaseId,
+            APPWRITE_CONFIG.collections.chatMessages,
+            msg.$id
+          )
+        }
+        
+        // Delete the chat
+        await serviceClient.databases.deleteDocument(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.chats,
+          chat.$id
+        )
       }
       
-      throw error
+      results.deleted_soft_deleted_chats = deletedChats.documents.length
+    } catch (e) {
+      console.error("Error cleaning up soft-deleted chats:", e)
+      results.deleted_soft_deleted_chats = 0
+    }
+    
+    // 2. Clean up expired rate limits
+    try {
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const expiredRateLimits = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.rateLimits,
+        [
+          Query.lessThan('window_start', oneDayAgo),
+          Query.limit(100)
+        ]
+      )
+      
+      for (const rateLimit of expiredRateLimits.documents) {
+        await serviceClient.databases.deleteDocument(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.rateLimits,
+          rateLimit.$id
+        )
+      }
+      
+      results.cleaned_rate_limits = expiredRateLimits.documents.length
+    } catch (e) {
+      console.error("Error cleaning up rate limits:", e)
+      results.cleaned_rate_limits = 0
+    }
+    
+    // 3. Clean up expired sessions (if collection exists)
+    try {
+      const now = new Date().toISOString()
+      const expiredSessions = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.userSessions,
+        [
+          Query.lessThan('expires_at', now),
+          Query.limit(100)
+        ]
+      )
+      
+      for (const session of expiredSessions.documents) {
+        await serviceClient.databases.deleteDocument(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.userSessions,
+          session.$id
+        )
+      }
+      
+      results.cleaned_sessions = expiredSessions.documents.length
+    } catch {
+      results.cleaned_sessions = 0
+    }
+    
+    // 4. Full cleanup: Delete old chats (7+ days)
+    if (fullCleanup) {
+      try {
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+        const oldChats = await serviceClient.databases.listDocuments(
+          APPWRITE_CONFIG.databaseId,
+          APPWRITE_CONFIG.collections.chats,
+          [
+            Query.isNull('deleted_at'),
+            Query.lessThan('created_at', sevenDaysAgo),
+            Query.limit(100)
+          ]
+        )
+        
+        for (const chat of oldChats.documents) {
+          // Delete messages for this chat
+          const messages = await serviceClient.databases.listDocuments(
+            APPWRITE_CONFIG.databaseId,
+            APPWRITE_CONFIG.collections.chatMessages,
+            [Query.equal('chat_id', chat.$id), Query.limit(1000)]
+          )
+          for (const msg of messages.documents) {
+            await serviceClient.databases.deleteDocument(
+              APPWRITE_CONFIG.databaseId,
+              APPWRITE_CONFIG.collections.chatMessages,
+              msg.$id
+            )
+          }
+          
+          // Delete the chat
+          await serviceClient.databases.deleteDocument(
+            APPWRITE_CONFIG.databaseId,
+            APPWRITE_CONFIG.collections.chats,
+            chat.$id
+          )
+        }
+        
+        results.deleted_old_chats = oldChats.documents.length
+      } catch (e) {
+        console.error("Error deleting old chats:", e)
+        results.deleted_old_chats = 0
+      }
     }
     
     return NextResponse.json({
       success: true,
-      ...data,
+      ...results,
       fullCleanup,
-      message: `Cleanup completed successfully`,
+      timestamp: new Date().toISOString(),
+      message: "Cleanup completed successfully",
     })
   } catch (error: any) {
     console.error("Cleanup error:", error)
@@ -67,59 +184,6 @@ export async function GET(request: Request) {
       { status: 500 }
     )
   }
-}
-
-// Fallback manual cleanup if RPC function doesn't exist
-async function runManualCleanup(supabase: any, fullCleanup: boolean) {
-  const results: Record<string, number> = {}
-  
-  // 1. Delete soft-deleted chats older than 2 days
-  const { count: deletedChats } = await supabase
-    .from("chats")
-    .delete({ count: "exact" })
-    .not("deleted_at", "is", null)
-    .lt("deleted_at", new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString())
-  
-  results.deleted_soft_deleted_chats = deletedChats || 0
-  
-  // 2. Clean up expired rate limits
-  const { count: cleanedRateLimits } = await supabase
-    .from("rate_limits")
-    .delete({ count: "exact" })
-    .lt("window_start", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-  
-  results.cleaned_rate_limits = cleanedRateLimits || 0
-  
-  // 3. Clean up expired sessions (if table exists)
-  try {
-    const { count: cleanedSessions } = await supabase
-      .from("user_sessions")
-      .delete({ count: "exact" })
-      .lt("expires_at", new Date().toISOString())
-    
-    results.cleaned_sessions = cleanedSessions || 0
-  } catch {
-    results.cleaned_sessions = 0
-  }
-  
-  // 4. Full cleanup: Delete old chats (7+ days)
-  if (fullCleanup) {
-    const { count: oldChats } = await supabase
-      .from("chats")
-      .delete({ count: "exact" })
-      .is("deleted_at", null)
-      .lt("created_at", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
-    
-    results.deleted_old_chats = oldChats || 0
-  }
-  
-  return NextResponse.json({
-    success: true,
-    ...results,
-    fullCleanup,
-    timestamp: new Date().toISOString(),
-    message: "Manual cleanup completed successfully",
-  })
 }
 
 // Also allow POST for manual triggers

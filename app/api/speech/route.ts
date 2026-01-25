@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkRateLimit, getRateLimitHeaders } from "@/lib/rate-limit";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { createServerAppwriteClient } from "@/lib/appwrite/server";
 
 const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
 const VOICE_ID = "7cETWFmFhbuQzaSKPpec";
@@ -50,12 +50,18 @@ const MODE_VOICE_SETTINGS: Record<Mode, { stability: number; similarity_boost: n
 
 export async function POST(req: NextRequest) {
   try {
-    // Check authentication and rate limiting
-    const supabase = await createServerSupabaseClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    // Check authentication and rate limiting using Appwrite
+    const { account } = await createServerAppwriteClient();
+    
+    let user: { $id: string } | null = null;
+    try {
+      user = await account.get();
+    } catch {
+      // Not authenticated - continue as guest
+    }
     
     // Get identifier for rate limiting (user ID or IP)
-    const identifier = user?.id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous";
+    const identifier = user?.$id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous";
     const isAuthenticated = !!user;
 
     // Check rate limit

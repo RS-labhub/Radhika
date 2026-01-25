@@ -8,6 +8,22 @@ const config: Config = {
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
     "*.{js,ts,jsx,tsx,mdx}"
   ],
+  safelist: [
+    // User message gradient backgrounds for different modes
+    "bg-gradient-to-r",
+    "from-cyan-500",
+    "to-blue-600",
+    "from-emerald-500",
+    "to-teal-600",
+    "from-rose-500",
+    "to-pink-600",
+    "from-purple-500",
+    "to-indigo-600",
+    "from-amber-500",
+    "to-orange-600",
+    "from-pink-500",
+    "to-rose-600",
+  ],
   theme: {
   	extend: {
 		fontFamily: {

@@ -29,7 +29,8 @@ function LoginForm() {
     setIsLoading(true)
 
     try {
-      const { error } = await signIn(email, password, remember)
+      const result = await signIn(email, password, remember)
+      const error = result?.error
       if (error) {
         setError(error.message)
       } else {

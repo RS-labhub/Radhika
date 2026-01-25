@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback, AvatarImage, resolveAvatarUrl as sharedResolveAvatarUrl } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -40,10 +40,12 @@ import {
   Loader2,
   Pencil,
   Palette,
-  UserCircle
+  UserCircle,
+  BookOpen
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { createClient } from "@/lib/supabase/client"
+import { getStorage } from "@/lib/appwrite/client"
+import { APPWRITE_CONFIG } from "@/lib/appwrite/config"
 import type { UserGender, UserAge, ConversationTone } from "@/types/chat"
 
 interface Provider {
@@ -96,16 +98,23 @@ const AI_PROVIDERS: Provider[] = [
     docsUrl: "https://huggingface.co/settings/tokens",
     models: ["flux-schnell", "sdxl-lightning"],
   },
+  {
+    id: "pollinations",
+    name: "Pollinations AI (Images)",
+    keyName: "POLLINATIONS_API_KEY",
+    placeholder: "sk_...",
+    docsUrl: "https://pollinations.ai/",
+    models: ["flux", "zimage", "turbo", "klein", "klein-large", "gptimage", "seedream", "kontext", "nanobanana", "seedream-pro", "gptimage-large", "nanobanana-pro"],
+  },
 ]
 
 const CUSTOM_MODEL_OPTION = "custom:__user_defined__"
 
 export default function SettingsPage() {
-  const { user, isLoading: authLoading } = useAuth()
+  const { user, isLoading: authLoading, signIn } = useAuth()
   const router = useRouter()
   const { theme, setTheme } = useTheme()
-  const supabase = createClient()
-  const avatarBucket = process.env.NEXT_PUBLIC_SUPABASE_AVATAR_BUCKET || "avatars"
+  const avatarBucketId = APPWRITE_CONFIG.buckets.avatars
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [isLoading, setIsLoading] = useState(true)
@@ -148,6 +157,8 @@ export default function SettingsPage() {
 
   // Preferences state
   const [voiceEnabled, setVoiceEnabled] = useState(false)
+  const [sourcesEnabled, setSourcesEnabled] = useState(false)
+  const [sourcesType, setSourcesType] = useState<"any" | "wikipedia" | "documentation">("any")
   const [uiStyle, setUIStyle] = useState<"modern" | "pixel">("modern")
   const [isMounted, setIsMounted] = useState(false)
   const [selectedTheme, setSelectedTheme] = useState<string>("system")
@@ -158,19 +169,26 @@ export default function SettingsPage() {
     // Already a full URL
     if (stored.startsWith("http")) return stored
 
-    // Stored as a path inside the bucket: create a long-lived signed URL (1 year)
-    const { data: signed, error: signedError } = await supabase.storage
-      .from(avatarBucket)
-      .createSignedUrl(stored, 60 * 60 * 24 * 365)
+    // For Appwrite storage, construct the file view URL
+    try {
+      const storage = getStorage()
+      const fileUrl = storage.getFileView(avatarBucketId, stored)
+      return fileUrl.toString()
+    } catch (e) {
+      console.warn("Failed to get avatar URL from Appwrite:", e)
+      return stored
+    }
+  }
 
-    if (!signedError && signed?.signedUrl) return signed.signedUrl
-
-    // Fallback to public URL (works if bucket is public)
-    const { data: publicData } = supabase.storage
-      .from(avatarBucket)
-      .getPublicUrl(stored)
-
-    return publicData.publicUrl
+  // Stub for compatibility - Appwrite doesn't use signed URLs the same way
+  const getPublicAvatarUrl = (fileId: string) => {
+    if (!fileId) return ""
+    try {
+      const storage = getStorage()
+      return storage.getFileView(avatarBucketId, fileId).toString()
+    } catch {
+      return ""
+    }
   }
 
   useEffect(() => {
@@ -212,7 +230,7 @@ export default function SettingsPage() {
   }, [loadError])
 
   // SessionStorage cache key and duration
-  const CACHE_KEY = `settings_data_${user?.id || 'anon'}`
+  const CACHE_KEY = `settings_data_${user?.$id || 'anon'}`
   const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
   const loadFromCache = () => {
@@ -283,8 +301,12 @@ export default function SettingsPage() {
         
         const storedVoice = localStorage.getItem("voice_enabled")
         const storedUIStyle = localStorage.getItem("ui_style")
+        const storedSources = localStorage.getItem("sources_enabled")
+        const storedSourcesType = localStorage.getItem("sources_type")
         if (storedVoice !== null) setVoiceEnabled(storedVoice === "true")
         if (storedUIStyle) setUIStyle(storedUIStyle as "modern" | "pixel")
+        if (storedSources !== null) setSourcesEnabled(storedSources === "true")
+        if (storedSourcesType) setSourcesType(storedSourcesType as "any" | "wikipedia" | "documentation")
         
         setHasLoadedOnce(true)
         setIsLoading(false)
@@ -300,63 +322,65 @@ export default function SettingsPage() {
         // Set email first (always available from auth)
         setEmail(user.email || "")
 
-        // Load user profile from users table
-        const { data: userData, error: userError } = await (supabase.from("users") as any)
-          .select("display_name, pet_name, avatar_url")
-          .eq("id", user.id)
-          .single()
-
+        // Load user profile and settings from API route (avoids permission issues)
         let loadedDisplayName = ""
         let loadedPetName = ""
         let loadedAvatarUrl = ""
 
-        if (userError) {
-          console.error("Error loading user data:", userError)
-          // Continue anyway - user might not have a profile yet
-        } else if (userData) {
-          // Prefer DB value but fall back to auth metadata if absent
-          const dbDisplay = userData.display_name
-          const metaDisplay = (user as any).user_metadata?.display_name || (user as any).user_metadata?.name
-          loadedDisplayName = dbDisplay ?? metaDisplay ?? ""
-          loadedPetName = userData.pet_name || ""
-          setDisplayName(loadedDisplayName)
-          setPetName(loadedPetName)
-          if (userData.avatar_url) {
-            try {
-              loadedAvatarUrl = await resolveAvatarUrl(userData.avatar_url)
-              setAvatarUrl(loadedAvatarUrl)
-            } catch (e) {
-              console.warn("Failed to resolve avatar URL", e)
-              loadedAvatarUrl = userData.avatar_url
-              setAvatarUrl(loadedAvatarUrl)
+        try {
+          const userIdCookie = document.cookie.split('; ').find(row => row.startsWith('appwrite-user-id='))
+          const userId = userIdCookie ? userIdCookie.split('=')[1] : user.$id
+
+          const response = await fetch('/api/users', {
+            method: 'GET',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-id': userId
+            }
+          })
+
+          if (response.ok) {
+            const data = await response.json()
+            
+            if (data.profile) {
+              // Prefer DB value but fall back to auth metadata if absent
+              const dbDisplay = data.profile.display_name
+              const metaDisplay = data.name || ""
+              loadedDisplayName = dbDisplay ?? metaDisplay ?? ""
+              loadedPetName = data.profile.pet_name || ""
+              setDisplayName(loadedDisplayName)
+              setPetName(loadedPetName)
+              
+              if (data.profile.avatar_url) {
+                try {
+                  loadedAvatarUrl = await resolveAvatarUrl(data.profile.avatar_url)
+                  setAvatarUrl(loadedAvatarUrl)
+                } catch (e) {
+                  console.warn("Failed to resolve avatar URL", e)
+                  loadedAvatarUrl = data.profile.avatar_url
+                  setAvatarUrl(loadedAvatarUrl)
+                }
+              }
+            }
+
+            if (data.settings?.personalization) {
+              const personalizationData = data.settings.personalization
+              const loadedGender = personalizationData.gender
+              const validGender = ["boy", "girl", "other"].includes(loadedGender) ? loadedGender : "other"
+              const loadedAge = personalizationData.age
+              const validAge = ["kid", "teenage", "mature", "senior"].includes(loadedAge) ? loadedAge : "teenage"
+              const loadedTone = personalizationData.tone
+              const validTone = ["professional", "casual", "friendly", "empathetic", "playful"].includes(loadedTone) ? loadedTone : "friendly"
+              
+              setGender(validGender)
+              setAge(validAge)
+              setTone(validTone)
             }
           }
-        }
-
-        // Load user personalization
-        const { data: personalizationData, error: personalizationError } = await (supabase.from("user_settings") as any)
-          .select("personalization")
-          .eq("user_id", user.id)
-          .single()
-
-        let loadedPersonalization = { gender: "other", age: "teenage", tone: "friendly" }
-
-        if (personalizationError) {
-          // Log a warning instead of console.error to avoid Next dev overlay treating this as an unhandled client error.
-          console.warn("Warning loading personalization:", personalizationError)
-          // Continue anyway - settings might not exist yet
-        } else if (personalizationData) {
-          const loadedGender = personalizationData.personalization?.gender
-          const validGender = ["boy", "girl", "other"].includes(loadedGender) ? loadedGender : "other"
-          const loadedAge = personalizationData.personalization?.age
-          const validAge = ["kid", "teenage", "mature", "senior"].includes(loadedAge) ? loadedAge : "teenage"
-          const loadedTone = personalizationData.personalization?.tone
-          const validTone = ["professional", "casual", "friendly", "empathetic", "playful"].includes(loadedTone) ? loadedTone : "friendly"
-          
-          loadedPersonalization = { gender: validGender, age: validAge, tone: validTone }
-          setGender(validGender)
-          setAge(validAge)
-          setTone(validTone)
+        } catch (userError) {
+          console.error("Error loading user data from API:", userError)
+          // Continue anyway - user might not have a profile yet
         }
 
         // Save to sessionStorage cache (only DB data)
@@ -364,7 +388,7 @@ export default function SettingsPage() {
           displayName: loadedDisplayName,
           petName: loadedPetName,
           avatarUrl: loadedAvatarUrl,
-          personalization: loadedPersonalization
+          personalization: { gender, age, tone }
         })
         console.log("Settings: Saved to sessionStorage cache")
 
@@ -390,9 +414,13 @@ export default function SettingsPage() {
         // Load preferences from localStorage
         const storedVoice = localStorage.getItem("voice_enabled")
         const storedUIStyle = localStorage.getItem("ui_style")
+        const storedSources = localStorage.getItem("sources_enabled")
+        const storedSourcesType = localStorage.getItem("sources_type")
         
         if (storedVoice !== null) setVoiceEnabled(storedVoice === "true")
         if (storedUIStyle) setUIStyle(storedUIStyle as "modern" | "pixel")
+        if (storedSources !== null) setSourcesEnabled(storedSources === "true")
+        if (storedSourcesType) setSourcesType(storedSourcesType as "any" | "wikipedia" | "documentation")
 
         setHasLoadedOnce(true)
         setLoadError(false)
@@ -407,7 +435,7 @@ export default function SettingsPage() {
     }
 
     loadSettings()
-  }, [user, supabase, hasLoadedOnce, retryCount])
+  }, [user, hasLoadedOnce, retryCount])
 
   // Manual retry function - clears cache to force fresh fetch
   const handleRetry = () => {
@@ -442,64 +470,42 @@ export default function SettingsPage() {
     try {
       setIsUploadingAvatar(true)
 
-      // Get previous avatar path for cleanup
-      let previousAvatarPath: string | null = null
-      const { data: existingProfile } = await (supabase.from("users") as any)
-        .select("avatar_url")
-        .eq("id", user.id)
-        .single()
-      if (existingProfile?.avatar_url) {
-        previousAvatarPath = extractStoragePath(existingProfile.avatar_url)
+      // Upload via API route to avoid permission issues
+      const formData = new FormData()
+      formData.append('avatar', file)
+
+      const userIdCookie = document.cookie.split('; ').find(row => row.startsWith('appwrite-user-id='))
+      const userId = userIdCookie ? userIdCookie.split('=')[1] : user.$id
+
+      const response = await fetch('/api/users/avatar', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'x-user-id': userId
+        },
+        body: formData
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to upload avatar')
       }
 
-      // Upload to Supabase Storage
-      const fileExt = file.name.split('.').pop()
-      const fileName = `${user.id}-${Date.now()}.${fileExt}`
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from(avatarBucket)
-        .upload(fileName, file, { upsert: true })
-
-      if (uploadError) throw uploadError
-
-      const storagePath = uploadData?.path || fileName
-
-      // Prefer a signed URL (works for private buckets); fall back to public URL
-      const { data: signed, error: signedError } = await supabase.storage
-        .from(avatarBucket)
-        .createSignedUrl(storagePath, 60 * 60 * 24 * 365)
-
-      const { data: { publicUrl } } = supabase.storage
-        .from(avatarBucket)
-        .getPublicUrl(storagePath)
-
-      const finalUrl = (!signedError && signed?.signedUrl) ? signed.signedUrl : publicUrl
-
-      // Update user profile (store the storage path; UI will resolve to signed/public URL)
-      const { error: updateError } = await (supabase.from('users') as any)
-        .update({ avatar_url: storagePath })
-        .eq('id', user.id)
-
-      if (updateError) throw updateError
-
-      setAvatarUrl(finalUrl)
-
-      // Delete previous avatar file if it existed
-      if (previousAvatarPath) {
-        const { error: removeError } = await supabase.storage
-          .from(avatarBucket)
-          .remove([previousAvatarPath])
-        if (removeError) {
-          console.warn("Failed to remove previous avatar", removeError)
-        }
+      const data = await response.json()
+      setAvatarUrl(data.avatarUrl)
+      
+      // Invalidate cache after successful upload
+      try {
+        sessionStorage.removeItem(CACHE_KEY)
+      } catch (e) {
+        // Ignore
       }
+
+      toast.success("Avatar uploaded successfully")
     } catch (err) {
       console.error("Avatar upload error:", err)
       const message = err instanceof Error ? err.message : "Failed to upload avatar"
-      if (message.includes("Bucket not found")) {
-        console.error("Avatar bucket not found. Please create the bucket in Supabase (see README).")
-      } else {
-        console.error(message)
-      }
+      toast.error(message)
     } finally {
       setIsUploadingAvatar(false)
     }
@@ -511,14 +517,26 @@ export default function SettingsPage() {
     try {
       setIsSaving(true)
 
-      const { error } = await (supabase.from("users") as any)
-        .update({
+      const userIdCookie = document.cookie.split('; ').find(row => row.startsWith('appwrite-user-id='))
+      const userId = userIdCookie ? userIdCookie.split('=')[1] : user.$id
+
+      const response = await fetch('/api/users', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': userId
+        },
+        body: JSON.stringify({
           display_name: displayName.trim(),
           pet_name: petName.trim() || null,
         })
-        .eq("id", user.id)
+      })
 
-      if (error) throw error
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to save profile')
+      }
       
       // Invalidate cache after successful save
       try {
@@ -548,13 +566,11 @@ export default function SettingsPage() {
     try {
       setIsDeletingAccount(true)
 
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: user.email || "",
-        password: deletePassword,
-      } as any)
-
-      if (signInError) {
-        console.error("Re-authentication failed:", signInError)
+      // Verify password by attempting to sign in via the signIn function from context
+      const signInResult = await signIn(user.email || "", deletePassword)
+      
+      if (signInResult && signInResult.error) {
+        console.error("Re-authentication failed:", signInResult.error)
         toast.error("Incorrect password")
         return
       }
@@ -562,7 +578,6 @@ export default function SettingsPage() {
       const res = await fetch("/api/delete-account", { method: "POST" })
       const json = await res.json()
       if (!res.ok) throw new Error(json?.error || "Failed to delete account")
-      try { await supabase.auth.signOut() } catch {}
       toast.success("Account deleted")
       router.push("/")
     } catch (err) {
@@ -581,21 +596,25 @@ export default function SettingsPage() {
     try {
       setIsSaving(true)
 
-      // Upsert user settings
       const personalization = { gender, age, tone }
 
-      const { error } = await (supabase.from("user_settings") as any)
-        .upsert(
-          {
-            user_id: user.id,
-            personalization,
-          },
-          {
-            onConflict: "user_id",
-          }
-        )
+      const userIdCookie = document.cookie.split('; ').find(row => row.startsWith('appwrite-user-id='))
+      const userId = userIdCookie ? userIdCookie.split('=')[1] : user.$id
 
-      if (error) throw error
+      const response = await fetch('/api/users', {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-id': userId
+        },
+        body: JSON.stringify({ personalization })
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to save personalization')
+      }
 
       // Invalidate cache after successful save
       try {
@@ -656,13 +675,20 @@ export default function SettingsPage() {
   // Persist preferences immediately when they change
   useEffect(() => {
     if (typeof window === "undefined") return
+    if (!hasLoadedOnce) return // Don't persist before initial load
     try {
       localStorage.setItem("voice_enabled", String(voiceEnabled))
       localStorage.setItem("ui_style", uiStyle)
+      localStorage.setItem("sources_enabled", String(sourcesEnabled))
+      localStorage.setItem("sources_type", sourcesType)
+      // Dispatch event to notify chat component of sources change
+      window.dispatchEvent(new CustomEvent("radhika:sourcesChanged", { 
+        detail: { enabled: sourcesEnabled, type: sourcesType } 
+      }))
     } catch (err) {
       console.error("Failed to save preferences:", err)
     }
-  }, [voiceEnabled, uiStyle])
+  }, [voiceEnabled, uiStyle, sourcesEnabled, sourcesType, hasLoadedOnce])
 
   const toggleKeyVisibility = (providerId: string) => {
     setVisibleKeys(prev => ({ ...prev, [providerId]: !prev[providerId] }))
@@ -1180,6 +1206,42 @@ export default function SettingsPage() {
                     </p>
                   </div>
                   <Switch checked={voiceEnabled} onCheckedChange={setVoiceEnabled} />
+                </div>
+
+                {/* Sources & Citations */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label className="flex items-center gap-2">
+                        <BookOpen className="h-4 w-4" />
+                        Sources & Citations
+                      </Label>
+                      <p className="text-xs text-slate-500">
+                        Show relevant documentation and Wikipedia links with AI responses
+                      </p>
+                    </div>
+                    <Switch checked={sourcesEnabled} onCheckedChange={setSourcesEnabled} />
+                  </div>
+                  
+                  {sourcesEnabled && (
+                    <div className="pl-4 border-l-2 border-slate-200 dark:border-slate-700 space-y-3">
+                      <Label className="text-sm">Source Type</Label>
+                      <RadioGroup value={sourcesType} onValueChange={(val) => setSourcesType(val as "any" | "wikipedia" | "documentation")}>
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="any" id="sources-any" />
+                          <Label htmlFor="sources-any" className="font-normal">Any (Documentation, Wikipedia, Articles)</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="wikipedia" id="sources-wikipedia" />
+                          <Label htmlFor="sources-wikipedia" className="font-normal">Wikipedia Only</Label>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <RadioGroupItem value="documentation" id="sources-documentation" />
+                          <Label htmlFor="sources-documentation" className="font-normal">Documentation Only</Label>
+                        </div>
+                      </RadioGroup>
+                    </div>
+                  )}
                 </div>
 
               </CardContent>

@@ -54,15 +54,18 @@ export function ProfileSelector({
 
   const isPixel = uiStyle === "pixel"
 
+  // Get user ID (Appwrite uses $id)
+  const userId = user?.$id
+
   // Load profiles for current mode
   useEffect(() => {
-    if (!user?.id) return
+    if (!userId) return
 
     const loadProfiles = async () => {
       setIsLoading(true)
       try {
-        const data = await getProfilesByMode(user.id, mode)
-        setProfiles(data)
+        const data = await getProfilesByMode(userId, mode)
+        setProfiles(data as ChatProfile[])
       } catch (error) {
         console.error("Failed to load profiles:", error)
       } finally {
@@ -71,15 +74,15 @@ export function ProfileSelector({
     }
 
     loadProfiles()
-  }, [user?.id, mode])
+  }, [userId, mode])
 
   const handleCreateProfile = async () => {
-    if (!user?.id || !newProfileName.trim()) return
+    if (!userId || !newProfileName.trim()) return
 
     setIsCreating(true)
     try {
-      const newProfile = await createProfile(user.id, mode, newProfileName.trim())
-      setProfiles((prev) => [...prev, newProfile])
+      const newProfile = await createProfile(userId, mode, newProfileName.trim())
+      setProfiles((prev) => [...prev, newProfile as ChatProfile])
       setIsCreateDialogOpen(false)
       setNewProfileName("")
       onProfileSelect(newProfile.id)

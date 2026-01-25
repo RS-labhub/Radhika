@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import type { Components } from "react-markdown"
-import { chatService } from "@/lib/supabase/chat-service"
+import { chatService } from "@/lib/appwrite/chat-service"
 import { localFavoritesStorage, type LocalFavorite } from "@/lib/services/local-favorites-storage"
 import { toast } from "sonner"
 
@@ -86,10 +86,10 @@ export default function FavoritesPage() {
 
   // Set user ID for local storage
   useEffect(() => {
-    if (user?.id) {
-      localFavoritesStorage.setUserId(user.id)
+    if (user?.$id) {
+      localFavoritesStorage.setUserId(user.$id)
     }
-  }, [user?.id])
+  }, [user?.$id])
 
   // Load local favorites immediately (no loading state)
   const loadLocalFavorites = useCallback(() => {

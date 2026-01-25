@@ -6,9 +6,10 @@ import type { Components } from "react-markdown"
 import { cn } from "@/lib/utils"
 import { AIVisualization } from "@/components/ai-visualization"
 import { User, Volume2, VolumeX } from "lucide-react"
-import type { Mode, ModeDefinition, UIStyle } from "@/types/chat"
+import type { Mode, ModeDefinition, UIStyle, Source } from "@/types/chat"
 import { Button } from "@/components/ui/button"
 import { MessageActions } from "@/components/chat/message-actions"
+import { SourcesDisplay } from "@/components/chat/sources-display"
 
 type MessageContent = string | Array<{ type?: string; text?: string; value?: string } | string>
 
@@ -18,6 +19,7 @@ interface BaseMessage {
   content: MessageContent
   createdAt?: string | number | Date
   isFavorite?: boolean
+  sources?: Source[]
 }
 
 interface ChatFeedProps {
@@ -189,9 +191,8 @@ export function ChatFeed({
                                 currentMode.borderPixel,
                               )
                             : cn(
-                                "rounded-3xl bg-gradient-to-r text-white shadow-lg",
-                                currentMode.gradient,
-                                "text-white",
+                                "rounded-3xl text-white shadow-lg",
+                                `bg-gradient-to-r ${currentMode.gradient}`,
                               )
                           : isPixel
                             ? "pixel-tile text-[0.82rem] leading-relaxed text-slate-700 dark:text-slate-100"
@@ -242,6 +243,10 @@ export function ChatFeed({
                           >
                             {normalizedContent}
                           </ReactMarkdown>
+                          {/* Display sources if available */}
+                          {!isUser && (message as any).sources && (message as any).sources.length > 0 && (
+                            <SourcesDisplay sources={(message as any).sources} />
+                          )}
                         </div>
                       )}
                     </div>

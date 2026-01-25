@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { localChatStorage, LocalChat, LocalMessage as StorageMessage } from "@/lib/services/local-chat-storage"
 import { localFavoritesStorage } from "@/lib/services/local-favorites-storage"
-import { chatService } from "@/lib/supabase/chat-service"
+import { chatService } from "@/lib/appwrite/chat-service"
 import type { Mode } from "@/types/chat"
 import { useAuth } from "@/contexts/auth-context"
 
@@ -40,14 +40,23 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
   const hasInitialized = useRef(false)
   const lastModeRef = useRef<string | null>(null)
   const lastProfileRef = useRef<string | undefined>(undefined)
+  const isMountedRef = useRef(true)
+  
+  // Cleanup on unmount - prevents state updates and cancels pending operations
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
 
   // Set user ID for both local storages
   useEffect(() => {
-    if (user?.id) {
-      localChatStorage.setUserId(user.id)
-      localFavoritesStorage.setUserId(user.id)
+    if (user?.$id) {
+      localChatStorage.setUserId(user.$id)
+      localFavoritesStorage.setUserId(user.$id)
     }
-  }, [user?.id])
+  }, [user?.$id])
 
   useEffect(() => {
     const unsubscribe = localChatStorage.subscribe((event, data) => {
@@ -88,47 +97,77 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
     // 2. Select an existing chat from history
     setCurrentChat(null)
     
-    // Fetch remote chats in background
+    // Fetch remote chats in background with timeout protection
     fetchAndMergeRemoteChats()
-  }, [isAuthenticated, user?.id, mode, profileId])
+  }, [isAuthenticated, user?.$id, mode, profileId])
 
   const fetchAndMergeRemoteChats = async () => {
-    if (!isAuthenticated || !user) return
+    if (!isAuthenticated || !user || !isMountedRef.current) return
+    
+    // Use Promise.race with timeout to prevent hanging
+    const timeoutPromise = new Promise<null>((resolve) => {
+      setTimeout(() => {
+        console.log("⏰ fetchAndMergeRemoteChats timeout (5s) - using local data only")
+        resolve(null)
+      }, 5000)
+    })
+    
     try {
-      const remoteChats = await chatService.getChats(mode, profileId)
-      if (remoteChats.length > 0) {
+      const remoteChats = await Promise.race([
+        chatService.getChats(mode, profileId),
+        timeoutPromise
+      ])
+      
+      // Check if still mounted before updating state
+      if (!isMountedRef.current) return
+      
+      if (remoteChats && remoteChats.length > 0) {
         localChatStorage.mergeRemoteChats(remoteChats)
-        if (!currentChat) {
+        if (!currentChat && isMountedRef.current) {
           const allChats = localChatStorage.getChats(mode, profileId)
           if (allChats.length > 0) {
             setCurrentChat(allChats[0])
           }
         }
       }
-    } catch (err) {
-      console.log("Could not fetch remote chats:", (err as Error).message)
+    } catch (err: any) {
+      // Don't log abort/timeout errors as they're expected
+      if (err?.name !== 'AbortError' && !err?.message?.includes('abort') && !err?.message?.includes('timeout')) {
+        console.log("Could not fetch remote chats:", err?.message || err)
+      }
     }
   }
 
   const loadMessages = useCallback(async (chatId?: string): Promise<LocalMessage[]> => {
     const targetChatId = chatId || currentChat?.localId || currentChat?.id
     if (!targetChatId) return []
+    
+    // 1. Get local messages immediately (Instant)
     const localMessages = localChatStorage.getMessagesForChat(targetChatId)
     const messages = localMessages.map(toLocalMessage)
+    
+    // 2. Trigger background refresh if we have a remote ID (Non-blocking)
     const remoteChatId = currentChat?.remoteId || chatId
-    if (remoteChatId && !remoteChatId.startsWith("local_")) {
-      try {
-        const remoteMessages = await chatService.getMessages(remoteChatId)
-        if (remoteMessages.length > 0) {
-          localChatStorage.mergeRemoteMessages(remoteChatId, remoteMessages)
-          return localChatStorage.getMessagesForChat(targetChatId).map(toLocalMessage)
-        }
-      } catch (err) {
-        console.log("Could not fetch remote messages:", (err as Error).message)
-      }
+    if (remoteChatId && !remoteChatId.startsWith("local_") && isAuthenticated && isMountedRef.current) {
+      // Fire and forget - don't await this
+      chatService.getMessages(remoteChatId)
+        .then(remoteMessages => {
+          if (remoteMessages.length > 0 && isMountedRef.current) {
+            console.log(`☁️ Background fetched ${remoteMessages.length} messages for ${targetChatId}`)
+            localChatStorage.mergeRemoteMessages(remoteChatId, remoteMessages)
+            // Note: UI won't auto-update active chat messages unless we trigger a re-render
+            // But this ensures next load has fresh data. 
+            // Real-time updates should use subscriptions if needed.
+          }
+        })
+        .catch(err => {
+          // Silent failure for background sync is acceptable
+          // console.warn("Background message sync failed:", err.message)
+        })
     }
+    
     return messages
-  }, [currentChat?.localId, currentChat?.remoteId, currentChat?.id])
+  }, [currentChat?.localId, currentChat?.remoteId, currentChat?.id, isAuthenticated])
 
   const addMessage = useCallback((message: LocalMessage): StorageMessage | undefined => {
     const chatId = currentChat?.localId || currentChat?.id
@@ -142,11 +181,11 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
       mode,
       title || mode.charAt(0).toUpperCase() + mode.slice(1) + " Chat",
       profileId,
-      user.id
+      user.$id
     )
     setCurrentChat(chat)
     return chat
-  }, [mode, profileId, user?.id])
+  }, [mode, profileId, user?.$id])
 
   const getOrCreateChat = useCallback((title?: string): LocalChat | undefined => {
     if (currentChat) return currentChat
@@ -174,37 +213,38 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
     console.log(`📚 getAllChats: Found ${chats.length} local chats for mode=${mode}`)
     
     // Then try to fetch and merge remote chats (with timeout)
-    if (isAuthenticated && user) {
+    if (isAuthenticated && user && isMountedRef.current) {
+      // Use Promise.race with timeout to prevent hanging
+      const timeoutPromise = new Promise<null>((resolve) => {
+        setTimeout(() => {
+          console.log("⏰ getAllChats remote fetch timeout (5s)")
+          resolve(null)
+        }, 5000)
+      })
+      
       try {
-        // Create an AbortController for this specific request
-        const controller = new AbortController()
-        const timeoutId = setTimeout(() => {
-          console.log("⏰ Remote fetch timeout - aborting")
-          controller.abort()
-        }, 8000) // 8 second timeout
+        const remoteChats = await Promise.race([
+          chatService.getChats(mode, profileId),
+          timeoutPromise
+        ])
         
-        try {
-          const remoteChats = await chatService.getChats(mode, profileId)
-          clearTimeout(timeoutId)
-          
-          if (remoteChats && remoteChats.length > 0) {
-            console.log(`☁️ Got ${remoteChats.length} remote chats, merging...`)
-            localChatStorage.mergeRemoteChats(remoteChats)
-            // Return the merged result
-            chats = localChatStorage.getChats(mode, profileId)
-            console.log(`✅ After merge: ${chats.length} total chats`)
-          } else {
-            console.log("☁️ No remote chats found")
-          }
-        } catch (fetchErr: any) {
-          clearTimeout(timeoutId)
-          // Don't log abort errors as they're expected on timeout
-          if (fetchErr?.name !== 'AbortError' && !fetchErr?.message?.includes('abort')) {
-            console.log("Could not fetch remote chats:", fetchErr?.message || fetchErr)
-          }
+        // Check if still mounted before updating
+        if (!isMountedRef.current) return chats
+        
+        if (remoteChats && remoteChats.length > 0) {
+          console.log(`☁️ Got ${remoteChats.length} remote chats, merging...`)
+          localChatStorage.mergeRemoteChats(remoteChats)
+          // Return the merged result
+          chats = localChatStorage.getChats(mode, profileId)
+          console.log(`✅ After merge: ${chats.length} total chats`)
+        } else {
+          console.log("☁️ No remote chats found or timeout")
         }
-      } catch (outerErr) {
-        console.log("Error in remote fetch setup:", outerErr)
+      } catch (fetchErr: any) {
+        // Don't log abort/timeout errors as they're expected
+        if (fetchErr?.name !== 'AbortError' && !fetchErr?.message?.includes('abort') && !fetchErr?.message?.includes('timeout')) {
+          console.log("Could not fetch remote chats:", fetchErr?.message || fetchErr)
+        }
       }
     }
     

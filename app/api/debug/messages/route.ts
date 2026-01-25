@@ -1,44 +1,57 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createServerSupabaseClient } from "../../../../lib/supabase/server"
+import { createServerAppwriteClient, createServiceClient, Query } from "../../../../lib/appwrite/server"
+import { APPWRITE_CONFIG } from "../../../../lib/appwrite/config"
+import { getAuthenticatedUser } from "../../../../lib/api-utils"
 
 // GET /api/debug/messages - Debug endpoint to check messages in database
 export async function GET(request: NextRequest) {
   try {
-    const supabase = (await createServerSupabaseClient()) as any
-    const { data: { user } } = await supabase.auth.getUser()
+    const { account, userId } = await createServerAppwriteClient()
+    const serviceClient = createServiceClient()
 
+    const user = await getAuthenticatedUser(request, account, serviceClient, userId)
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Get all chats for the user
-    const { data: chats, error: chatsError } = await supabase
-      .from("chats")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(10)
-
-    if (chatsError) {
-      return NextResponse.json({ error: "Failed to fetch chats", details: chatsError }, { status: 500 })
+    // Get all chats for the user (use service client for consistent access)
+    let chats: any[] = []
+    try {
+      const chatsResult = await serviceClient.databases.listDocuments(
+        APPWRITE_CONFIG.databaseId,
+        APPWRITE_CONFIG.collections.chats,
+        [
+          Query.equal('user_id', user.$id),
+          Query.orderDesc('created_at'),
+          Query.limit(10)
+        ]
+      )
+      chats = chatsResult.documents
+    } catch (e) {
+      return NextResponse.json({ error: "Failed to fetch chats", details: e }, { status: 500 })
     }
 
     // Get all messages for these chats
-    const chatIds = chats.map((chat: any) => chat.id)
+    const chatIds = chats.map((chat: any) => chat.$id)
     
     let allMessages: any[] = []
     if (chatIds.length > 0) {
-      const { data: messages, error: messagesError } = await supabase
-        .from("chat_messages")
-        .select("*")
-        .in("chat_id", chatIds)
-        .order("created_at", { ascending: true })
-
-      if (messagesError) {
-        return NextResponse.json({ error: "Failed to fetch messages", details: messagesError }, { status: 500 })
+      for (const chatId of chatIds) {
+        try {
+          const messagesResult = await serviceClient.databases.listDocuments(
+            APPWRITE_CONFIG.databaseId,
+            APPWRITE_CONFIG.collections.chatMessages,
+            [
+              Query.equal('chat_id', chatId),
+              Query.orderAsc('created_at'),
+              Query.limit(100)
+            ]
+          )
+          allMessages = allMessages.concat(messagesResult.documents)
+        } catch (e) {
+          console.warn("Failed to fetch messages for chat:", chatId, e)
+        }
       }
-
-      allMessages = messages || []
     }
 
     // Group messages by chat
@@ -60,13 +73,13 @@ export async function GET(request: NextRequest) {
         system: allMessages.filter((m: any) => m.role === 'system').length,
       },
       chats: chats.map((chat: any) => ({
-        id: chat.id,
+        id: chat.$id,
         title: chat.title,
         mode: chat.mode,
         created_at: chat.created_at,
-        messageCount: messagesByChat[chat.id]?.length || 0,
-        messages: (messagesByChat[chat.id] || []).map((m: any) => ({
-          id: m.id,
+        messageCount: messagesByChat[chat.$id]?.length || 0,
+        messages: (messagesByChat[chat.$id] || []).map((m: any) => ({
+          id: m.$id,
           role: m.role,
           content: m.content.substring(0, 100) + (m.content.length > 100 ? '...' : ''),
           created_at: m.created_at

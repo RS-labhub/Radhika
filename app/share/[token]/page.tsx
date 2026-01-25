@@ -3,11 +3,11 @@
 import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import { Loader2, MessageCircle, User, Sun, Moon, Copy, Download } from "lucide-react"
-import { chatService } from "@/lib/supabase/chat-service"
-import type { Chat, ChatMessage } from "@/types/chat"
+import type { Chat, Source } from "@/types/chat"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { cn } from "@/lib/utils"
+import { SourcesDisplay } from "@/components/chat/sources-display"
 
 export default function SharedChatPage() {
   const params = useParams()
@@ -48,19 +48,21 @@ export default function SharedChatPage() {
         setLoading(true)
         setError(null)
 
-        // Load the chat by share token
-        const sharedChat = await chatService.getChatByShareToken(token)
+        // Load the chat by share token via API (public access)
+        const response = await fetch(`/api/share/${token}`)
         
-        if (!sharedChat) {
-          setError("This chat link is invalid or has been removed.")
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: "Chat not found" }))
+          setError(errorData.error || "This chat link is invalid or has been removed.")
           return
         }
 
-        setChat(sharedChat)
+        const data = await response.json()
+        
+        setChat(data.chat)
 
-        // Load messages for this chat
-        const chatMessages = await chatService.getMessages(sharedChat.id)
-        const formattedMessages = chatMessages.map((msg: ChatMessage) => ({
+        // Format messages
+        const formattedMessages = data.messages.map((msg: any) => ({
           id: msg.id,
           role: msg.role,
           content: msg.content,
@@ -391,6 +393,10 @@ export default function SharedChatPage() {
                         >
                           {String(message.content)}
                         </ReactMarkdown>
+                        {/* Display sources if available */}
+                        {!isUser && (message as any).sources && (message as any).sources.length > 0 && (
+                          <SourcesDisplay sources={(message as any).sources} />
+                        )}
                       </div>
                     )}
                   </div>

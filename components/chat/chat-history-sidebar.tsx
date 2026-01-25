@@ -17,7 +17,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { chatService } from "@/lib/supabase/chat-service"
+import { chatService } from "@/lib/appwrite/chat-service"
 import { localChatStorage } from "@/lib/services/local-chat-storage"
 
 interface ChatHistorySidebarProps {
@@ -48,14 +48,47 @@ export function ChatHistorySidebar({
   const [sharingChatId, setSharingChatId] = useState<string | null>(null)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
 
-  // Deduplicate chats by ID - safety measure to prevent duplicate key errors
+  // Deduplicate chats by ID and filter out chats with 0 messages
+  // Only filter if message_count is explicitly 0, not if it's undefined/null
   const uniqueChats = chats.reduce((acc, chat) => {
     // Check if we already have a chat with this ID
     if (!acc.find(c => c.id === chat.id)) {
-      acc.push(chat)
+      // Only exclude chats that explicitly have message_count === 0
+      // If message_count is undefined/null, include the chat (might be loading or old data)
+      const messageCount = chat.message_count
+      if (messageCount === undefined || messageCount === null || messageCount > 0) {
+        acc.push(chat)
+      }
     }
     return acc
   }, [] as Chat[])
+
+  const copyToClipboard = async (text: string): Promise<boolean> => {
+    try {
+      // Try the modern clipboard API first
+      if (navigator.clipboard && document.hasFocus()) {
+        await navigator.clipboard.writeText(text)
+        return true
+      }
+      
+      // Fallback: create a temporary input element
+      const textArea = document.createElement('textarea')
+      textArea.value = text
+      textArea.style.position = 'fixed'
+      textArea.style.left = '-999999px'
+      textArea.style.top = '-999999px'
+      document.body.appendChild(textArea)
+      textArea.focus()
+      textArea.select()
+      
+      const success = document.execCommand('copy')
+      document.body.removeChild(textArea)
+      return success
+    } catch (err) {
+      console.error('Clipboard copy failed:', err)
+      return false
+    }
+  }
 
   const handleShareClick = async (chatId: string, e: React.MouseEvent) => {
     e.stopPropagation()
@@ -68,15 +101,15 @@ export function ChatHistorySidebar({
         // Already shared, show existing URL
         const url = `${window.location.origin}/share/${chat.share_token}`
         setShareUrl(url)
-        await navigator.clipboard.writeText(url)
-        alert('Share link copied to clipboard!')
+        const copied = await copyToClipboard(url)
+        alert(copied ? 'Share link copied to clipboard!' : `Share link: ${url}`)
       } else {
         // Generate new share token
         const token = await chatService.shareChat(chatId)
         const url = `${window.location.origin}/share/${token}`
         setShareUrl(url)
-        await navigator.clipboard.writeText(url)
-        alert('Share link created and copied to clipboard!')
+        const copied = await copyToClipboard(url)
+        alert(copied ? 'Share link created and copied to clipboard!' : `Share link created: ${url}`)
         onRefresh?.()
       }
     } catch (err) {
@@ -100,11 +133,17 @@ export function ChatHistorySidebar({
       setIsDeleting(true)
       // Delete from localStorage first (always works)
       localChatStorage.deleteChat(chatToDelete)
-      // Then try to delete from Supabase (may fail, but local is already gone)
+      // Then try to delete from Appwrite (may fail for local-only chats, which is fine)
       try {
         await chatService.deleteChat(chatToDelete)
-      } catch (err) {
-        console.log("Could not delete from Supabase:", err)
+      } catch (err: any) {
+        // Only log as info if it's a "not found" error (expected for local-only chats)
+        const errMsg = err?.message || String(err)
+        if (errMsg.includes("not found") || errMsg.includes("Chat not found")) {
+          console.log("Chat was local-only, already deleted from localStorage:", chatToDelete)
+        } else {
+          console.warn("Could not delete from Appwrite:", err)
+        }
       }
       onDeleteChat?.(chatToDelete)
       onRefresh?.()
@@ -122,11 +161,11 @@ export function ChatHistorySidebar({
       setIsDeleting(true)
       // Delete from localStorage first (always works)
       localChatStorage.deleteAllChats()
-      // Then try to delete from Supabase (may fail, but local is already gone)
+      // Then try to delete from Appwrite (may fail, but local is already gone)
       try {
         await chatService.deleteAllChats()
       } catch (err) {
-        console.log("Could not delete all from Supabase:", err)
+        console.log("Could not delete all from Appwrite:", err)
       }
       onDeleteAllChats?.()
       onRefresh?.()
