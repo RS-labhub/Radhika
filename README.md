@@ -1,8 +1,8 @@
 ![banner](https://raw.githubusercontent.com/RS-labhub/Radhika/master/public/banner.png)
 
-# RADHIKA - AI Chat Assistant
+# Radhika
 
-A modern AI chat assistant built with Next.js 16, React 19, and Appwrite. Features multiple LLM providers, image generation, voice interaction, and persistent chat history.
+A modern AI assistant that adapts to how you work and think. Multiple modes, multiple models, one seamless chat experience. Features multiple LLM providers, image generation, voice interaction, and persistent chat history.
 
 **Try now**: https://radhika-sharma.vercel.app
 
@@ -37,6 +37,8 @@ MIT License - see [LICENSE](LICENSE)
 
 **Built with ❤️ by [Rohan Sharma](https://github.com/RS-labhub)**
 
-[⭐ Star](https://github.com/RS-labhub/radhika) • [🐛 Issues](https://github.com/RS-labhub/radhika/issues) • [� Discussions](https://github.com/RS-labhub/radhika/discussions)
+![author](public/Author.jpg)
+
+[⭐ Star](https://github.com/RS-labhub/radhika) • [🐛 Issues](https://github.com/RS-labhub/radhika/issues) • [🗣️ Discussions](https://github.com/RS-labhub/radhika/discussions)
 
 </div>
