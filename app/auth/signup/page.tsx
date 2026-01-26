@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Loader2, Mail, Lock, User, AlertCircle, ArrowLeft, CheckCircle, Eye, EyeOff } from "lucide-react"
+import { Loader2, Mail, Lock, User, AlertCircle, ArrowLeft, Eye, EyeOff } from "lucide-react"
 
 export default function SignupPage() {
   const [displayName, setDisplayName] = useState("")
@@ -19,7 +19,7 @@ export default function SignupPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
+  // const [success, setSuccess] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const { signUp } = useAuth()
   const router = useRouter()
@@ -46,7 +46,9 @@ export default function SignupPage() {
       if (error) {
         setError(error.message)
       } else {
-        setSuccess(true)
+        // setSuccess(true)
+        // Redirect to home page after successful signup
+        router.push("/")
       }
     } catch (err) {
       setError("An unexpected error occurred")
@@ -55,36 +57,36 @@ export default function SignupPage() {
     }
   }
 
-  if (success) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 p-4">
-        <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.15),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(139,92,246,0.12),_transparent_55%)]" />
+  // if (success) {
+  //   return (
+  //     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 p-4">
+  //       <div className="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.15),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(139,92,246,0.12),_transparent_55%)]" />
         
-        <Card className="w-full max-w-md shadow-xl border-white/60 dark:border-white/10 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl">
-          <CardHeader className="space-y-1 text-center">
-            <div className="mx-auto w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/50 flex items-center justify-center mb-4">
-              <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
-            </div>
-            <CardTitle className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-              Check your email
-            </CardTitle>
-            <CardDescription className="text-slate-500 dark:text-slate-400">
-              We&apos;ve sent a verification link to <strong>{email}</strong>. 
-              Please check your inbox and click the link to verify your account.
-            </CardDescription>
-          </CardHeader>
-          <CardFooter className="flex flex-col gap-4">
-            <Button 
-              onClick={() => router.push("/auth/login")}
-              className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white"
-            >
-              Go to Sign In
-            </Button>
-          </CardFooter>
-        </Card>
-      </div>
-    )
-  }
+  //       <Card className="w-full max-w-md shadow-xl border-white/60 dark:border-white/10 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl">
+  //         <CardHeader className="space-y-1 text-center">
+  //           <div className="mx-auto w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/50 flex items-center justify-center mb-4">
+  //             <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
+  //           </div>
+  //           <CardTitle className="text-2xl font-bold text-slate-900 dark:text-slate-100">
+  //             Check your email
+  //           </CardTitle>
+  //           <CardDescription className="text-slate-500 dark:text-slate-400">
+  //             We&apos;ve sent a verification link to <strong>{email}</strong>. 
+  //             Please check your inbox and click the link to verify your account.
+  //           </CardDescription>
+  //         </CardHeader>
+  //         <CardFooter className="flex flex-col gap-4">
+  //           <Button 
+  //             onClick={() => router.push("/auth/login")}
+  //             className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white"
+  //           >
+  //             Go to Sign In
+  //           </Button>
+  //         </CardFooter>
+  //       </Card>
+  //     </div>
+  //   )
+  // }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950 p-4">

@@ -89,6 +89,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     initAuth()
+    
+    // Listen for sign out events (e.g., from account deletion)
+    const handleSignOutEvent = () => {
+      console.log("[AuthContext] Sign out event received")
+      setUser(null)
+      setRole('guest')
+    }
+    
+    if (typeof window !== 'undefined') {
+      window.addEventListener('radhika:signOut', handleSignOutEvent)
+    }
+    
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('radhika:signOut', handleSignOutEvent)
+      }
+    }
   }, [refreshUser])
 
   const signIn = useCallback(async (email: string, password: string, remember?: boolean): Promise<{ error?: Error } | void> => {
@@ -138,6 +155,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       // Create the account
       await account.create('unique()', email, password, name)
+      
+      // Send email verification - DISABLED FOR NOW
+      // Users can directly access dashboard after signup
+      // try {
+      //   const verifyUrl = `${window.location.origin}/auth/confirm`
+      //   await account.createVerification(verifyUrl)
+      // } catch (verifyError) {
+      //   console.warn('Failed to send verification email:', verifyError)
+      //   // Don't fail signup if verification email fails
+      // }
       
       // Sign in immediately after signup
       await signIn(email, password)
