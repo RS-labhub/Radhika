@@ -64,11 +64,17 @@ export function UserMenu({ isPixel = false, accentRingClass }: UserMenuProps) {
           console.log("[UserMenu] Fetched profile data:", data.profile)
           console.log("[UserMenu] Avatar URL:", data.profile?.avatar_url)
           setProfile(data.profile)
+        } else if (response.status === 401) {
+          // User is not authenticated - silently clear profile
+          console.log("[UserMenu] User not authenticated, clearing profile")
+          setProfile(null)
         } else {
           console.error("[UserMenu] Failed to fetch profile, status:", response.status)
         }
       } catch (error) {
         console.error("[UserMenu] Failed to fetch profile:", error)
+        // Silently handle errors to avoid showing errors during sign out
+        setProfile(null)
       }
     }
 
@@ -171,7 +177,7 @@ export function UserMenu({ isPixel = false, accentRingClass }: UserMenuProps) {
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-col space-y-1">
             <p className="text-sm font-medium leading-none">{truncatedName}</p>
-            <p className="text-xs leading-none text-slate-500 dark:text-slate-400">{user?.email}</p>
+            <p className="text-xs leading-normal text-slate-500 dark:text-slate-400 break-all">{user?.email}</p>
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />

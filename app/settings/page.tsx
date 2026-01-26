@@ -566,19 +566,45 @@ export default function SettingsPage() {
     try {
       setIsDeletingAccount(true)
 
-      // Verify password by attempting to sign in via the signIn function from context
-      const signInResult = await signIn(user.email || "", deletePassword)
+      // Send password to API for verification before deletion
+      const res = await fetch("/api/delete-account", { 
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          ...(user?.$id && { "x-user-id": user.$id }),
+        },
+        body: JSON.stringify({ password: deletePassword })
+      })
+      const json = await res.json()
       
-      if (signInResult && signInResult.error) {
-        console.error("Re-authentication failed:", signInResult.error)
-        toast.error("Incorrect password")
+      if (!res.ok) {
+        if (res.status === 401) {
+          toast.error("Incorrect password")
+        } else {
+          throw new Error(json?.error || "Failed to delete account")
+        }
         return
       }
-
-      const res = await fetch("/api/delete-account", { method: "POST" })
-      const json = await res.json()
-      if (!res.ok) throw new Error(json?.error || "Failed to delete account")
-      toast.success("Account deleted")
+      
+      // Account deleted successfully
+      toast.success("Account deleted successfully")
+      
+      // Clear the session and sign out before redirecting
+      try {
+        // Clear session cookies
+        document.cookie = 'appwrite-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+        document.cookie = 'appwrite-user-id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+        
+        // Trigger sign out event for other components
+        if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+          window.dispatchEvent(new CustomEvent("radhika:signOut"))
+        }
+      } catch (e) {
+        console.warn("Error clearing session:", e)
+      }
+      
+      // Redirect to home page
       router.push("/")
     } catch (err) {
       console.error("Failed to delete account:", err)
