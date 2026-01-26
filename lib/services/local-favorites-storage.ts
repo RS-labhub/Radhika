@@ -142,9 +142,22 @@ class LocalFavoritesStorageService {
   // Set current user ID (call this when user logs in)
   setUserId(userId: string) {
     if (this.currentUserId !== userId) {
+      // Clear in-memory cache when user changes
+      this.favorites.clear()
+      this.syncQueue.clear()
+      
       this.currentUserId = userId
       this.loadFromStorage() // Reload for this user
+      console.log(`👤 [Favorites] Switched to user ${userId}, loaded their data`)
     }
+  }
+
+  // Clear user data (call this when user logs out)
+  clearCurrentUser() {
+    this.favorites.clear()
+    this.syncQueue.clear()
+    this.currentUserId = null
+    console.log('👤 [Favorites] Cleared current user data')
   }
 
   // Subscribe to events

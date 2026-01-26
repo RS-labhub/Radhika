@@ -171,7 +171,7 @@ export function UserMenu({ isPixel = false, accentRingClass }: UserMenuProps) {
         align="end" 
         className={cn(
           "w-56",
-          isPixel && "pixel-panel"
+          isPixel && "border-2 border-slate-400/50 dark:border-slate-600/50 bg-slate-50 dark:bg-slate-900 shadow-[0_8px_0_rgba(15,23,42,0.12)] dark:shadow-[0_8px_0_rgba(15,23,42,0.4)] rounded-lg"
         )}
       >
         <DropdownMenuLabel className="font-normal">

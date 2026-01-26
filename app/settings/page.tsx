@@ -367,7 +367,7 @@ export default function SettingsPage() {
             if (data.settings?.personalization) {
               const personalizationData = data.settings.personalization
               const loadedGender = personalizationData.gender
-              const validGender = ["boy", "girl", "other"].includes(loadedGender) ? loadedGender : "other"
+              const validGender = ["male", "female", "other"].includes(loadedGender) ? loadedGender : "other"
               const loadedAge = personalizationData.age
               const validAge = ["kid", "teenage", "mature", "senior"].includes(loadedAge) ? loadedAge : "teenage"
               const loadedTone = personalizationData.tone
@@ -1039,12 +1039,12 @@ export default function SettingsPage() {
                   <Label>Gender</Label>
                   <RadioGroup value={gender} onValueChange={(value) => setGender(value as UserGender)}>
                     <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="boy" id="boy" />
-                      <Label htmlFor="boy" className="font-normal">Boy</Label>
+                      <RadioGroupItem value="male" id="male" />
+                      <Label htmlFor="male" className="font-normal">Male</Label>
                     </div>
                     <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="girl" id="girl" />
-                      <Label htmlFor="girl" className="font-normal">Girl</Label>
+                      <RadioGroupItem value="female" id="female" />
+                      <Label htmlFor="female" className="font-normal">Female</Label>
                     </div>
                     <div className="flex items-center space-x-2">
                       <RadioGroupItem value="other" id="other" />

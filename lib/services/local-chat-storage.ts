@@ -153,9 +153,26 @@ class LocalChatStorageService {
   // Set current user ID (call this when user logs in)
   setUserId(userId: string) {
     if (this.currentUserId !== userId) {
+      // Clear in-memory cache when user changes
+      this.chats.clear()
+      this.messages.clear()
+      this.syncQueue.clear()
+      this.deletedChatIds.clear()
+      
       this.currentUserId = userId
       this.loadFromStorage() // Reload for this user
+      console.log(`👤 Switched to user ${userId}, loaded their data`)
     }
+  }
+
+  // Clear user data (call this when user logs out)
+  clearCurrentUser() {
+    this.chats.clear()
+    this.messages.clear()
+    this.syncQueue.clear()
+    this.deletedChatIds.clear()
+    this.currentUserId = null
+    console.log('👤 Cleared current user data')
   }
 
   // Subscribe to events
@@ -723,6 +740,12 @@ class LocalChatStorageService {
       console.log(`⏳ Waiting for chat to sync before syncing message ${msg.localId}`)
       return
     }
+    
+    // Verify the chat is actually synced (has a remoteId and sync status is not pending)
+    if (chat && (chat.syncStatus === 'pending' || chat.syncStatus === 'failed')) {
+      console.log(`⏳ Chat ${chat.localId} is still ${chat.syncStatus}, waiting before syncing message ${msg.localId}`)
+      return
+    }
 
     // Check retry delay
     const retryDelay = Math.min(INITIAL_RETRY_DELAY * Math.pow(2, item.retryCount), MAX_RETRY_DELAY)
@@ -731,7 +754,7 @@ class LocalChatStorageService {
     }
 
     try {
-      console.log(`🔄 Syncing NEW message: ${msg.localId}`)
+      console.log(`🔄 Syncing NEW message: ${msg.localId} to chat ${remoteChatId}`)
 
       const remoteMsg = await chatService.addMessage(
         remoteChatId,
@@ -756,10 +779,33 @@ class LocalChatStorageService {
       this.emit('message-synced', msg)
       console.log(`✅ Message synced: ${msg.localId} -> ${remoteMsg.id} (remoteId saved)`)
     } catch (err: any) {
+      const errorMessage = err?.message || 'Unknown error'
+      
+      // If "Chat not found", the chat may not have been created yet on the server
+      // Clear the remoteChatId so we wait for the chat to sync properly
+      if (errorMessage.toLowerCase().includes('chat not found')) {
+        console.log(`⚠️ Chat not found for message ${msg.localId}, clearing remoteChatId and waiting for chat sync`)
+        msg.remoteChatId = undefined
+        if (chat) {
+          // Mark chat for re-sync if it claims to be synced but server doesn't have it
+          if (chat.syncStatus === 'synced') {
+            console.log(`⚠️ Chat ${chat.localId} marked synced but server returned 404 - resetting for re-sync`)
+            chat.syncStatus = 'pending'
+            chat.remoteId = undefined
+            this.chats.set(chat.localId, chat)
+            this.addToSyncQueue('chat', chat.localId)
+          }
+        }
+        this.messages.set(msg.localId, msg)
+        this.saveToStorage()
+        // Don't increment retry count for this case - just wait
+        return
+      }
+      
       item.retryCount++
       item.lastRetryAt = Date.now()
       msg.syncStatus = 'failed'
-      msg.syncError = err?.message || 'Unknown error'
+      msg.syncError = errorMessage
       this.messages.set(msg.localId, msg)
 
       if (item.retryCount >= MAX_RETRIES) {

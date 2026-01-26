@@ -117,7 +117,7 @@ export async function POST(req: Request) {
       return Response.json({ error: "Invalid request format: Request body must be valid JSON" }, { status: 400 })
     }
 
-    const { messages, mode = "general", provider = "groq", apiKey, model, userGender = "boy", userAge = "teenage", conversationTone } = body
+    const { messages, mode = "general", provider = "groq", apiKey, model, userGender = "male", userAge = "teenage", conversationTone } = body
 
     // Validate messages
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -134,21 +134,23 @@ export async function POST(req: Request) {
 
     if (user) {
       try {
-        // Fetch user data (name, pet_name) from Appwrite
+        // Fetch user data (name, pet_name) from Appwrite using service client
         try {
-          const users = await databases.listDocuments(
+          // Use getDocument with the user's ID (since document ID = user ID)
+          const userData = await serviceClient.databases.getDocument(
             APPWRITE_CONFIG.databaseId,
             APPWRITE_CONFIG.collections.users,
-            [Query.equal('$id', user.$id)]
+            user.$id
           )
           
-          if (users.documents.length > 0) {
-            const userData = users.documents[0]
+          if (userData) {
             userName = userData.display_name
             petName = userData.pet_name
+            console.log('[chat] User profile found:', { userName, petName })
           }
-        } catch {
+        } catch (e: any) {
           // User document may not exist yet
+          console.log('[chat] User document not found:', e?.message)
         }
 
         // Fallback to email if display_name is not set
@@ -160,11 +162,12 @@ export async function POST(req: Request) {
             .split(' ')
             .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
             .join(' ')
+          console.log('[chat] Using email-derived name:', userName)
         }
 
-        // Fetch user settings (gender, age, tone) from Appwrite
+        // Fetch user settings (gender, age, tone) from Appwrite using service client
         try {
-          const settings = await databases.listDocuments(
+          const settings = await serviceClient.databases.listDocuments(
             APPWRITE_CONFIG.databaseId,
             APPWRITE_CONFIG.collections.userSettings,
             [Query.equal('user_id', user.$id)]
@@ -174,14 +177,28 @@ export async function POST(req: Request) {
             const settingsData = settings.documents[0]
             dbGender = settingsData.gender
             dbAge = settingsData.age
-            // Check if tone is in personalization JSONB
-            const personalization = settingsData.personalization
-            if (personalization && typeof personalization === 'object' && personalization.tone) {
-              dbTone = personalization.tone
+            // First check the individual tone field, then fallback to personalization JSON
+            dbTone = settingsData.tone
+            if (!dbTone) {
+              const personalization = settingsData.personalization
+              if (personalization) {
+                try {
+                  const parsedPersonalization = typeof personalization === 'string' 
+                    ? JSON.parse(personalization) 
+                    : personalization
+                  if (parsedPersonalization?.tone) {
+                    dbTone = parsedPersonalization.tone
+                  }
+                } catch {
+                  // Ignore parse errors
+                }
+              }
             }
+            console.log('[chat] User settings found:', { gender: dbGender, age: dbAge, tone: dbTone })
           }
-        } catch {
+        } catch (e: any) {
           // Settings may not exist yet
+          console.log('[chat] User settings not found:', e?.message)
         }
       } catch (err) {
         console.error("Failed to fetch user personalization:", err)

@@ -281,25 +281,6 @@ export default function FavoritesPage() {
   }
 
   // No loading state for local-first! We always show data from localStorage immediately
-  // Only show error state if no local favorites AND there's a sync error
-  if (loadError && favorites.length === 0) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
-        <div className="text-center">
-          <h2 className="text-xl font-semibold text-slate-900 dark:text-white mb-2">
-            Connection Issue
-          </h2>
-          <p className="text-slate-500 dark:text-slate-400 mb-4">
-            Unable to sync with server. Your local favorites are shown below.
-          </p>
-          <Button onClick={handleRetry} className="gap-2">
-            <RefreshCw className="h-4 w-4" />
-            Retry Sync
-          </Button>
-        </div>
-      </div>
-    )
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">
