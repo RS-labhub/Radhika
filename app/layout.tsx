@@ -26,7 +26,7 @@ export const metadata: Metadata = {
     type: 'website',
     images: [
       {
-        url: '/og-image.jpg',
+        url: '/og-image.png',
         width: 1200,
         height: 630,
         alt: 'Radhika AI Chatbot',
@@ -38,7 +38,7 @@ export const metadata: Metadata = {
     title: 'Radhika',
     description:
       'Radhika is a versatile AI chatbot designed to assist with a wide range of tasks, from answering questions to providing recommendations and engaging in casual conversation.',
-    images: ['/og-image.jpg'],
+    images: ['/og-image.png'],
   },
   // metadataBase is used to resolve relative URLs in openGraph/twitter images
   // during static metadata generation. Use an env var in production and
