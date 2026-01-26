@@ -16,8 +16,8 @@ interface PersonalizationDialogProps {
 }
 
 const GENDER_OPTIONS: { value: UserGender; label: string; emoji: string }[] = [
-  { value: "boy", label: "Boy", emoji: "👦" },
-  { value: "girl", label: "Girl", emoji: "👧" },
+  { value: "male", label: "Male", emoji: "👦" },
+  { value: "female", label: "Female", emoji: "👧" },
   { value: "other", label: "Other", emoji: "🧑" },
 ]
 
@@ -192,7 +192,7 @@ export function PersonalizationDialog({
               Radhika will talk to you as a{" "}
               <span className="font-semibold text-cyan-600 dark:text-cyan-400">
                 {GENDER_OPTIONS.find((g) => g.value === personalization.gender)?.emoji}{" "}
-                {personalization.gender === "boy" ? "guy" : personalization.gender === "girl" ? "girl" : "friend"}
+                {personalization.gender === "male" ? "guy" : personalization.gender === "female" ? "girl" : "friend"}
               </span>{" "}
               with{" "}
               <span className="font-semibold text-cyan-600 dark:text-cyan-400">

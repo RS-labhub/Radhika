@@ -136,9 +136,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Refresh user info
       await refreshUser()
       
-      // Initialize user in database
+      // Initialize user in database with user data
       try {
-        await fetch('/api/users/init', { method: 'POST' })
+        const currentUser = await account.get()
+        await fetch('/api/users/init', { 
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUser.$id,
+            email: currentUser.email,
+            displayName: currentUser.name
+          })
+        })
       } catch (err) {
         console.warn('Failed to initialize user data:', err)
       }
@@ -186,6 +195,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Clear the session cookies
     document.cookie = 'appwrite-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
     document.cookie = 'appwrite-user-id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+    
+    // Clear all local storage for chats and favorites
+    try {
+      const { localChatStorage } = await import('@/lib/services/local-chat-storage')
+      const { localFavoritesStorage } = await import('@/lib/services/local-favorites-storage')
+      localChatStorage.clearAll()
+      localFavoritesStorage.clearAll()
+      console.log('🗑️ Cleared local chat and favorites storage on sign out')
+    } catch (err) {
+      console.warn('Failed to clear local storage:', err)
+    }
     
     // Reset Appwrite clients
     resetAppwriteClients()

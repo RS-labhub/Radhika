@@ -91,7 +91,6 @@ export async function GET(request: NextRequest) {
         display_name: userProfile.display_name,
         pet_name: userProfile.pet_name,
         avatar_url: avatarUrl,
-        email_verified: userProfile.email_verified,
         created_at: userProfile.created_at,
         updated_at: userProfile.updated_at
       } : {
@@ -99,12 +98,21 @@ export async function GET(request: NextRequest) {
         display_name: user.name || null,
         pet_name: null,
         avatar_url: avatarUrl,
-        email_verified: false,
         created_at: null,
         updated_at: null
       },
       settings: userSettings ? {
-        personalization: userSettings.personalization,
+        // Include individual fields for personalization
+        personalization: {
+          gender: userSettings.gender || 'other',
+          age: userSettings.age || 'teenage',
+          tone: userSettings.tone || 'friendly',
+          // Also parse the JSON personalization if it exists for backwards compatibility
+          ...(userSettings.personalization ? (typeof userSettings.personalization === 'string' 
+            ? (() => { try { return JSON.parse(userSettings.personalization) } catch { return {} } })()
+            : userSettings.personalization
+          ) : {})
+        },
         updated_at: userSettings.updated_at
       } : null
     })
@@ -156,19 +164,22 @@ export async function PATCH(request: NextRequest) {
       } catch (e: any) {
         // Document might not exist, try to create it
         if (e.code === 404) {
+          console.log("User profile document not found, creating new one for user:", user.$id)
           await serviceClient.databases.createDocument(
             APPWRITE_CONFIG.databaseId,
             APPWRITE_CONFIG.collections.users,
             user.$id,
             {
+              email: user.email, // Required field
               display_name: display_name || '',
               pet_name: pet_name || null,
-              email_verified: user.emailVerification || false,
+              role: 'authenticated',
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             }
           )
         } else {
+          console.error("Error updating user profile:", e)
           throw e
         }
       }
@@ -178,7 +189,6 @@ export async function PATCH(request: NextRequest) {
     if (personalization !== undefined) {
       try {
         // Extract personalization fields (gender, age, tone) as individual fields
-        // since the 'personalization' attribute might not exist as a JSON field
         const updateData: Record<string, any> = {
           updated_at: new Date().toISOString()
         }
@@ -186,8 +196,9 @@ export async function PATCH(request: NextRequest) {
         // If personalization is an object with gender/age/tone, update those fields
         if (personalization.gender) updateData.gender = personalization.gender
         if (personalization.age) updateData.age = personalization.age
+        if (personalization.tone) updateData.tone = personalization.tone
+        
         // Store the full personalization as JSON string if the field exists
-        // Fall back to just updating individual fields if it doesn't
         try {
           const serializedPersonalization = typeof personalization === 'string' 
             ? personalization 
@@ -196,6 +207,8 @@ export async function PATCH(request: NextRequest) {
         } catch (e) {
           console.warn("Could not serialize personalization, using individual fields only")
         }
+        
+        console.log("Saving personalization:", updateData)
 
         // Check if settings exist
         const existingSettings = await serviceClient.databases.listDocuments(
@@ -205,7 +218,7 @@ export async function PATCH(request: NextRequest) {
         )
 
         if (existingSettings.documents.length > 0) {
-          // Update existing - first try with personalization field, then without
+          // Update existing - first try with all fields, then without problematic ones
           try {
             await serviceClient.databases.updateDocument(
               APPWRITE_CONFIG.databaseId,
@@ -237,6 +250,7 @@ export async function PATCH(request: NextRequest) {
           }
           if (personalization.gender) createData.gender = personalization.gender
           if (personalization.age) createData.age = personalization.age
+          if (personalization.tone) createData.tone = personalization.tone
           
           try {
             createData.personalization = typeof personalization === 'string' 
@@ -246,6 +260,8 @@ export async function PATCH(request: NextRequest) {
             // Ignore
           }
           
+          console.log("Creating new user settings:", createData)
+          
           try {
             await serviceClient.databases.createDocument(
               APPWRITE_CONFIG.databaseId,
@@ -254,9 +270,10 @@ export async function PATCH(request: NextRequest) {
               createData
             )
           } catch (e: any) {
-            // If personalization field doesn't exist, try without it
-            if (e.message?.includes('personalization')) {
+            // If personalization or tone fields don't exist, try without them
+            if (e.message?.includes('personalization') || e.message?.includes('tone')) {
               delete createData.personalization
+              delete createData.tone
               await serviceClient.databases.createDocument(
                 APPWRITE_CONFIG.databaseId,
                 APPWRITE_CONFIG.collections.userSettings,

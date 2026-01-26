@@ -188,7 +188,7 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
                     : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
                 )}
                 aria-label="Personalize"
-                title={userPersonalization ? `${userPersonalization.gender === "boy" ? "👦" : userPersonalization.gender === "girl" ? "👧" : "🧑"} ${userPersonalization.age}` : "Personalize"}
+                title={userPersonalization ? `${userPersonalization.gender === "male" ? "👦" : userPersonalization.gender === "female" ? "👧" : "🧑"} ${userPersonalization.age}` : "Personalize"}
               >
                 <UserCircle className="h-4 w-4" />
               </Button>

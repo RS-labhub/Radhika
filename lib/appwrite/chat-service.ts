@@ -54,6 +54,14 @@ export class ChatService {
   private readonly CACHE_TTL = 120000
   private generation = 0
   private abortController = new AbortController()
+  
+  // Caches to reduce DB calls
+  private chatsCache: Map<string, { chats: Chat[]; timestamp: number }> = new Map()
+  private messagesCache: Map<string, { messages: ChatMessage[]; timestamp: number }> = new Map()
+  private pendingChatsFetch: Map<string, Promise<Chat[]>> = new Map()
+  private pendingMessagesFetch: Map<string, Promise<ChatMessage[]>> = new Map()
+  private readonly CHATS_CACHE_TTL = 30000 // 30 seconds for chat list
+  private readonly MESSAGES_CACHE_TTL = 15000 // 15 seconds for messages
 
   constructor() {
     // Lazy initialization - will be set on first use
@@ -131,6 +139,43 @@ export class ChatService {
     const user = await this.getCurrentUser()
     if (!user) return []
 
+    // Build cache key
+    const cacheKey = `${user.$id}:${mode || ''}:${profileId || ''}:${includeArchived}:${limit}`
+    
+    // Check cache first
+    const cached = this.chatsCache.get(cacheKey)
+    if (cached && Date.now() - cached.timestamp < this.CHATS_CACHE_TTL) {
+      console.log('Using cached chats list')
+      return cached.chats
+    }
+    
+    // Check if there's already a pending request for the same data (request deduplication)
+    const pending = this.pendingChatsFetch.get(cacheKey)
+    if (pending) {
+      console.log('Waiting for pending chats fetch')
+      return pending
+    }
+
+    // Create the fetch promise
+    const fetchPromise = this.fetchChatsInternal(user, mode, profileId, includeArchived, limit, cacheKey)
+    this.pendingChatsFetch.set(cacheKey, fetchPromise)
+    
+    try {
+      const result = await fetchPromise
+      return result
+    } finally {
+      this.pendingChatsFetch.delete(cacheKey)
+    }
+  }
+  
+  private async fetchChatsInternal(
+    user: any,
+    mode: string | undefined,
+    profileId: string | undefined,
+    includeArchived: boolean,
+    limit: number,
+    cacheKey: string
+  ): Promise<Chat[]> {
     // Use API route for fetching chats (avoids permission issues)
     try {
       const params = new URLSearchParams()
@@ -151,7 +196,12 @@ export class ChatService {
       }
       
       const data = await res.json()
-      return data.chats || []
+      const chats = data.chats || []
+      
+      // Cache the result
+      this.chatsCache.set(cacheKey, { chats, timestamp: Date.now() })
+      
+      return chats
     } catch (error) {
       console.warn('API fetch failed, trying direct access:', error)
       return this.getChatsDirectly(mode, profileId, includeArchived, limit)
@@ -382,6 +432,47 @@ export class ChatService {
   } = {}): Promise<ChatMessage[]> {
     const { limit = 50, cursor, direction = 'asc' } = options
     
+    // Build cache key (only for non-paginated requests without cursor)
+    const cacheKey = cursor ? null : `${chatId}:${limit}:${direction}`
+    
+    // Check cache first (only if no cursor - paginated requests should not be cached)
+    if (cacheKey) {
+      const cached = this.messagesCache.get(cacheKey)
+      if (cached && Date.now() - cached.timestamp < this.MESSAGES_CACHE_TTL) {
+        console.log(`Using cached messages for chat ${chatId}`)
+        return cached.messages
+      }
+      
+      // Check for pending request deduplication
+      const pending = this.pendingMessagesFetch.get(cacheKey)
+      if (pending) {
+        console.log(`Waiting for pending messages fetch for chat ${chatId}`)
+        return pending
+      }
+    }
+    
+    // Create the fetch promise
+    const fetchPromise = this.fetchMessagesInternal(chatId, options, cacheKey)
+    if (cacheKey) {
+      this.pendingMessagesFetch.set(cacheKey, fetchPromise)
+    }
+    
+    try {
+      return await fetchPromise
+    } finally {
+      if (cacheKey) {
+        this.pendingMessagesFetch.delete(cacheKey)
+      }
+    }
+  }
+  
+  private async fetchMessagesInternal(
+    chatId: string,
+    options: { limit?: number; cursor?: string; direction?: 'asc' | 'desc' },
+    cacheKey: string | null
+  ): Promise<ChatMessage[]> {
+    const { limit = 50, cursor, direction = 'asc' } = options
+    
     // Get user first
     const user = await this.getCurrentUser()
     
@@ -403,7 +494,14 @@ export class ChatService {
       })
       if (res.ok) {
         const data = await res.json()
-        return data.messages || []
+        const messages = data.messages || []
+        
+        // Cache the result (only for non-paginated requests)
+        if (cacheKey) {
+          this.messagesCache.set(cacheKey, { messages, timestamp: Date.now() })
+        }
+        
+        return messages
       }
     } catch (error) {
       console.warn('API messages fetch failed, trying direct access:', error)
@@ -435,7 +533,34 @@ export class ChatService {
       queries
     )
 
-    return response.documents.map(this.mapMessageDocument)
+    const messages = response.documents.map(this.mapMessageDocument)
+    
+    // Cache the result
+    if (cacheKey) {
+      this.messagesCache.set(cacheKey, { messages, timestamp: Date.now() })
+    }
+    
+    return messages
+  }
+  
+  // Invalidate caches when data changes
+  invalidateChatsCache(): void {
+    this.chatsCache.clear()
+    console.log('Chats cache invalidated')
+  }
+  
+  invalidateMessagesCache(chatId?: string): void {
+    if (chatId) {
+      // Remove all cache entries for this chat
+      for (const key of this.messagesCache.keys()) {
+        if (key.startsWith(`${chatId}:`)) {
+          this.messagesCache.delete(key)
+        }
+      }
+    } else {
+      this.messagesCache.clear()
+    }
+    console.log('🗑️ Messages cache invalidated')
   }
 
   async addMessage(chatId: string, data: {
@@ -468,6 +593,8 @@ export class ChatService {
       
       if (res.ok) {
         const result = await res.json()
+        // Invalidate messages cache for this chat
+        this.invalidateMessagesCache(chatId)
         return this.mapMessageDocument(result.message)
       }
       

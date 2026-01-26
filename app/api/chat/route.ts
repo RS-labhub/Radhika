@@ -11,6 +11,35 @@ import { handleGroqRequest } from "./providers/groq"
 // Allow streaming responses up to 60 seconds for complex reasoning
 export const maxDuration = 60
 
+// In-memory caches for reducing DB calls (server-side)
+const creatorCache = new Map<string, { isCreator: boolean; timestamp: number }>()
+const userDataCache = new Map<string, { data: any; timestamp: number }>()
+const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+
+function getCachedCreatorStatus(userId: string): boolean | null {
+  const cached = creatorCache.get(userId)
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.isCreator
+  }
+  return null
+}
+
+function setCachedCreatorStatus(userId: string, isCreator: boolean): void {
+  creatorCache.set(userId, { isCreator, timestamp: Date.now() })
+}
+
+function getCachedUserData(userId: string): any | null {
+  const cached = userDataCache.get(userId)
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data
+  }
+  return null
+}
+
+function setCachedUserData(userId: string, data: any): void {
+  userDataCache.set(userId, { data, timestamp: Date.now() })
+}
+
 export async function POST(req: Request) {
   try {
     console.log("=== Chat API Request Started ===")
@@ -42,50 +71,60 @@ export async function POST(req: Request) {
     const identifier = user?.$id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous"
     const isAuthenticated = !!user
 
-    // Check whether this user is the reserved creator (server-side)
+    // Check whether this user is the reserved creator (server-side) - with caching
     let isCreator = false
     if (user?.$id) {
-      try {
-        const userEmail = user.email?.toLowerCase()
-        
-        // Check reserved_emails collection using service client (bypasses permissions)
+      // Check cache first
+      const cachedCreatorStatus = getCachedCreatorStatus(user.$id)
+      if (cachedCreatorStatus !== null) {
+        isCreator = cachedCreatorStatus
+        console.log('[chat] Creator status (cached):', isCreator)
+      } else {
         try {
-          const reservedEmails = await serviceClient.databases.listDocuments(
-            APPWRITE_CONFIG.databaseId,
-            APPWRITE_CONFIG.collections.reservedEmails,
-            [Query.equal('email', userEmail || '')]
-          )
+          const userEmail = user.email?.toLowerCase()
           
-          if (reservedEmails.documents.length > 0) {
-            isCreator = true
-          }
-        } catch {
-          // Reserved emails collection may not exist
-        }
-        
-        // Also check profile
-        if (!isCreator) {
+          // Check reserved_emails collection using service client (bypasses permissions)
           try {
-            const profiles = await databases.listDocuments(
+            const reservedEmails = await serviceClient.databases.listDocuments(
               APPWRITE_CONFIG.databaseId,
-              APPWRITE_CONFIG.collections.profiles,
-              [Query.equal('$id', user.$id)]
+              APPWRITE_CONFIG.collections.reservedEmails,
+              [Query.equal('email', userEmail || '')]
             )
             
-            if (profiles.documents.length > 0 && profiles.documents[0].is_creator) {
+            if (reservedEmails.documents.length > 0) {
               isCreator = true
             }
           } catch {
-            // Profile may not exist
+            // Reserved emails collection may not exist
           }
+          
+          // Also check profile
+          if (!isCreator) {
+            try {
+              const profiles = await databases.listDocuments(
+                APPWRITE_CONFIG.databaseId,
+                APPWRITE_CONFIG.collections.profiles,
+                [Query.equal('$id', user.$id)]
+              )
+              
+              if (profiles.documents.length > 0 && profiles.documents[0].is_creator) {
+                isCreator = true
+              }
+            } catch {
+              // Profile may not exist
+            }
+          }
+          
+          // Cache the result
+          setCachedCreatorStatus(user.$id, isCreator)
+          
+          console.log('[chat] Creator check (from DB):', { 
+            email: userEmail, 
+            isCreator 
+          })
+        } catch (e) {
+          console.error('[chat] Failed to check creator status:', e)
         }
-        
-        console.log('[chat] Creator check:', { 
-          email: userEmail, 
-          isCreator 
-        })
-      } catch (e) {
-        console.error('[chat] Failed to check creator status:', e)
       }
     }
 
@@ -117,7 +156,7 @@ export async function POST(req: Request) {
       return Response.json({ error: "Invalid request format: Request body must be valid JSON" }, { status: 400 })
     }
 
-    const { messages, mode = "general", provider = "groq", apiKey, model, userGender = "boy", userAge = "teenage", conversationTone } = body
+    const { messages, mode = "general", provider = "groq", apiKey, model, userGender = "male", userAge = "teenage", conversationTone } = body
 
     // Validate messages
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -125,7 +164,7 @@ export async function POST(req: Request) {
       return Response.json({ error: "Invalid messages format: Messages must be a non-empty array" }, { status: 400 })
     }
 
-    // Fetch user personalization data from database if authenticated
+    // Fetch user personalization data from database if authenticated - with caching
     let userName: string | undefined
     let petName: string | undefined
     let dbGender: string | undefined
@@ -133,66 +172,97 @@ export async function POST(req: Request) {
     let dbTone: string | undefined
 
     if (user) {
-      try {
-        // Fetch user data (name, pet_name) from Appwrite
+      // Check cache first
+      const cachedUserData = getCachedUserData(user.$id)
+      if (cachedUserData) {
+        userName = cachedUserData.userName
+        petName = cachedUserData.petName
+        dbGender = cachedUserData.gender
+        dbAge = cachedUserData.age
+        dbTone = cachedUserData.tone
+        console.log('[chat] User data (cached):', { userName, petName, gender: dbGender, age: dbAge, tone: dbTone })
+      } else {
         try {
-          const users = await databases.listDocuments(
-            APPWRITE_CONFIG.databaseId,
-            APPWRITE_CONFIG.collections.users,
-            [Query.equal('$id', user.$id)]
-          )
-          
-          if (users.documents.length > 0) {
-            const userData = users.documents[0]
-            userName = userData.display_name
-            petName = userData.pet_name
-          }
-        } catch {
-          // User document may not exist yet
-        }
-
-        // Fallback to email if display_name is not set
-        if (!userName && user.email) {
-          const emailName = user.email.split('@')[0]
-          // Convert "john.doe" or "john_doe" to "John Doe"
-          userName = emailName
-            .replace(/[._-]/g, ' ')
-            .split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-            .join(' ')
-        }
-
-        // Fetch user settings (gender, age, tone) from Appwrite
-        try {
-          const settings = await databases.listDocuments(
-            APPWRITE_CONFIG.databaseId,
-            APPWRITE_CONFIG.collections.userSettings,
-            [Query.equal('user_id', user.$id)]
-          )
-          
-          if (settings.documents.length > 0) {
-            const settingsData = settings.documents[0]
-            dbGender = settingsData.gender
-            dbAge = settingsData.age
-            // Check if tone is in personalization JSONB
-            const personalization = settingsData.personalization
-            if (personalization && typeof personalization === 'object' && personalization.tone) {
-              dbTone = personalization.tone
+          // Fetch user data (name, pet_name) from Appwrite using service client
+          try {
+            // Use getDocument with the user's ID (since document ID = user ID)
+            const userData = await serviceClient.databases.getDocument(
+              APPWRITE_CONFIG.databaseId,
+              APPWRITE_CONFIG.collections.users,
+              user.$id
+            )
+            
+            if (userData) {
+              userName = userData.display_name
+              petName = userData.pet_name
+              console.log('[chat] User profile found:', { userName, petName })
             }
+          } catch (e: any) {
+            // User document may not exist yet
+            console.log('[chat] User document not found:', e?.message)
           }
-        } catch {
-          // Settings may not exist yet
-        }
-      } catch (err) {
-        console.error("Failed to fetch user personalization:", err)
-        // Fallback to email even on error
-        if (!userName && user.email) {
-          const emailName = user.email.split('@')[0]
-          userName = emailName
-            .replace(/[._-]/g, ' ')
-            .split(' ')
-            .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-            .join(' ')
+
+          // Fallback to email if display_name is not set
+          if (!userName && user.email) {
+            const emailName = user.email.split('@')[0]
+            // Convert "john.doe" or "john_doe" to "John Doe"
+            userName = emailName
+              .replace(/[._-]/g, ' ')
+              .split(' ')
+              .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+              .join(' ')
+            console.log('[chat] Using email-derived name:', userName)
+          }
+
+          // Fetch user settings (gender, age, tone) from Appwrite using service client
+          try {
+            const settings = await serviceClient.databases.listDocuments(
+              APPWRITE_CONFIG.databaseId,
+              APPWRITE_CONFIG.collections.userSettings,
+              [Query.equal('user_id', user.$id)]
+            )
+            
+            if (settings.documents.length > 0) {
+              const settingsData = settings.documents[0]
+              dbGender = settingsData.gender
+              dbAge = settingsData.age
+              // First check the individual tone field, then fallback to personalization JSON
+              dbTone = settingsData.tone
+              if (!dbTone) {
+                const personalization = settingsData.personalization
+                if (personalization) {
+                  try {
+                    const parsedPersonalization = typeof personalization === 'string' 
+                      ? JSON.parse(personalization) 
+                      : personalization
+                    if (parsedPersonalization?.tone) {
+                      dbTone = parsedPersonalization.tone
+                    }
+                  } catch {
+                    // Ignore parse errors
+                  }
+                }
+              }
+              console.log('[chat] User settings found:', { gender: dbGender, age: dbAge, tone: dbTone })
+            }
+          } catch (e: any) {
+            // Settings may not exist yet
+            console.log('[chat] User settings not found:', e?.message)
+          }
+          
+          // Cache the combined result
+          setCachedUserData(user.$id, { userName, petName, gender: dbGender, age: dbAge, tone: dbTone })
+        } catch (err) {
+          console.error("Failed to fetch user personalization:", err)
+          // Fallback to email even on error
+          if (!userName && user.email) {
+            const emailName = user.email.split('@')[0]
+            userName = emailName
+              .replace(/[._-]/g, ' ')
+              .split(' ')
+              .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+              .join(' ')
+          }
         }
       }
     }

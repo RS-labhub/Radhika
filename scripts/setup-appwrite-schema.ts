@@ -255,7 +255,8 @@ async function setupSchema() {
   await createAttribute(COLLECTIONS.userSettings, 'string', 'ui_style', { default: 'modern', size: 50 })
   await createAttribute(COLLECTIONS.userSettings, 'string', 'personalization', { size: 10000 }) // JSON string
   await createAttribute(COLLECTIONS.userSettings, 'string', 'gender', { default: 'other', size: 20 })
-  await createAttribute(COLLECTIONS.userSettings, 'string', 'age', { default: 'adult', size: 20 })
+  await createAttribute(COLLECTIONS.userSettings, 'string', 'age', { default: 'teenage', size: 20 })
+  await createAttribute(COLLECTIONS.userSettings, 'string', 'tone', { default: 'friendly', size: 50 })
   await createAttribute(COLLECTIONS.userSettings, 'integer', 'cached_total_chats', { default: 0 })
   await createAttribute(COLLECTIONS.userSettings, 'integer', 'cached_total_messages', { default: 0 })
   await createAttribute(COLLECTIONS.userSettings, 'datetime', 'stats_updated_at')

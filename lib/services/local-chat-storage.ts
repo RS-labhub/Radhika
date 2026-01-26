@@ -153,9 +153,26 @@ class LocalChatStorageService {
   // Set current user ID (call this when user logs in)
   setUserId(userId: string) {
     if (this.currentUserId !== userId) {
+      // Clear in-memory cache when user changes
+      this.chats.clear()
+      this.messages.clear()
+      this.syncQueue.clear()
+      this.deletedChatIds.clear()
+      
       this.currentUserId = userId
       this.loadFromStorage() // Reload for this user
+      console.log(`👤 Switched to user ${userId}, loaded their data`)
     }
+  }
+
+  // Clear user data (call this when user logs out)
+  clearCurrentUser() {
+    this.chats.clear()
+    this.messages.clear()
+    this.syncQueue.clear()
+    this.deletedChatIds.clear()
+    this.currentUserId = null
+    console.log('👤 Cleared current user data')
   }
 
   // Subscribe to events
@@ -723,6 +740,12 @@ class LocalChatStorageService {
       console.log(`⏳ Waiting for chat to sync before syncing message ${msg.localId}`)
       return
     }
+    
+    // Verify the chat is actually synced (has a remoteId and sync status is not pending)
+    if (chat && (chat.syncStatus === 'pending' || chat.syncStatus === 'failed')) {
+      console.log(`⏳ Chat ${chat.localId} is still ${chat.syncStatus}, waiting before syncing message ${msg.localId}`)
+      return
+    }
 
     // Check retry delay
     const retryDelay = Math.min(INITIAL_RETRY_DELAY * Math.pow(2, item.retryCount), MAX_RETRY_DELAY)
@@ -731,7 +754,7 @@ class LocalChatStorageService {
     }
 
     try {
-      console.log(`🔄 Syncing NEW message: ${msg.localId}`)
+      console.log(`🔄 Syncing NEW message: ${msg.localId} to chat ${remoteChatId}`)
 
       const remoteMsg = await chatService.addMessage(
         remoteChatId,
@@ -756,10 +779,33 @@ class LocalChatStorageService {
       this.emit('message-synced', msg)
       console.log(`✅ Message synced: ${msg.localId} -> ${remoteMsg.id} (remoteId saved)`)
     } catch (err: any) {
+      const errorMessage = err?.message || 'Unknown error'
+      
+      // If "Chat not found", the chat may not have been created yet on the server
+      // Clear the remoteChatId so we wait for the chat to sync properly
+      if (errorMessage.toLowerCase().includes('chat not found')) {
+        console.log(`⚠️ Chat not found for message ${msg.localId}, clearing remoteChatId and waiting for chat sync`)
+        msg.remoteChatId = undefined
+        if (chat) {
+          // Mark chat for re-sync if it claims to be synced but server doesn't have it
+          if (chat.syncStatus === 'synced') {
+            console.log(`⚠️ Chat ${chat.localId} marked synced but server returned 404 - resetting for re-sync`)
+            chat.syncStatus = 'pending'
+            chat.remoteId = undefined
+            this.chats.set(chat.localId, chat)
+            this.addToSyncQueue('chat', chat.localId)
+          }
+        }
+        this.messages.set(msg.localId, msg)
+        this.saveToStorage()
+        // Don't increment retry count for this case - just wait
+        return
+      }
+      
       item.retryCount++
       item.lastRetryAt = Date.now()
       msg.syncStatus = 'failed'
-      msg.syncError = err?.message || 'Unknown error'
+      msg.syncError = errorMessage
       this.messages.set(msg.localId, msg)
 
       if (item.retryCount >= MAX_RETRIES) {
@@ -787,12 +833,32 @@ class LocalChatStorageService {
       }
 
       // Check if we already have this chat locally (by remoteId)
-      const existingLocal = Array.from(this.chats.values()).find(c => c.remoteId === remote.id)
+      let existingLocal = Array.from(this.chats.values()).find(c => c.remoteId === remote.id)
+      
+      // If not found by remoteId, check for pending local chats with matching mode, title, and similar timestamp
+      // This prevents duplicates when remote data arrives before local sync completes
+      if (!existingLocal) {
+        const remoteCreatedAt = new Date(remote.created_at).getTime()
+        existingLocal = Array.from(this.chats.values()).find(c => 
+          !c.remoteId && // No remoteId yet (pending sync)
+          c.syncStatus === 'pending' &&
+          c.mode === remote.mode &&
+          c.title === remote.title &&
+          c.user_id === remote.user_id &&
+          // Created within 30 seconds of each other (likely the same chat)
+          Math.abs(new Date(c.created_at).getTime() - remoteCreatedAt) < 30000
+        )
+        if (existingLocal) {
+          console.log(`🔍 Found pending local chat by content match: ${existingLocal.localId} -> ${remote.id}`)
+        }
+      }
       
       if (existingLocal) {
         // Update local with remote data (remote is source of truth for synced items)
         const merged: LocalChat = {
           ...existingLocal,
+          id: remote.id, // Use remote ID as primary
+          remoteId: remote.id, // Set the remoteId now that we know it
           title: remote.title || existingLocal.title,
           last_message_at: remote.last_message_at || existingLocal.last_message_at,
           is_archived: remote.is_archived ?? existingLocal.is_archived,
@@ -800,8 +866,13 @@ class LocalChatStorageService {
           share_token: remote.share_token,
           is_public: remote.is_public,
           shared_at: remote.shared_at,
+          syncStatus: 'synced',
+          lastSyncAt: new Date().toISOString(),
         }
         this.chats.set(existingLocal.localId, merged)
+        // Remove from sync queue since it's now synced
+        this.syncQueue.delete(existingLocal.localId)
+        console.log(`✅ Merged remote chat ${remote.id} with local ${existingLocal.localId}`)
       } else {
         // This is a remote-only chat (from another device or before local-first)
         const localId = `remote_${remote.id}`
@@ -809,6 +880,13 @@ class LocalChatStorageService {
         // Also check if local ID was deleted
         if (this.deletedChatIds.has(localId)) {
           console.log(`⏭️ Skipping deleted chat (local ID): ${localId}`)
+          continue
+        }
+        
+        // Check if a chat with this remote ID was already added
+        const alreadyExists = Array.from(this.chats.values()).some(c => c.remoteId === remote.id)
+        if (alreadyExists) {
+          console.log(`⏭️ Chat with remoteId ${remote.id} already exists, skipping`)
           continue
         }
         
@@ -977,6 +1055,71 @@ class LocalChatStorageService {
     this.syncQueue.clear()
     this.saveToStorage()
     console.log('🗑️ Cleared all local chat storage')
+  }
+
+  /**
+   * Deduplicate chats with the same remoteId
+   * Keeps the one with more recent activity, merges messages to that chat
+   */
+  deduplicateChats(): { removed: number; merged: number } {
+    let removed = 0
+    let merged = 0
+
+    // Group chats by remoteId
+    const byRemoteId = new Map<string, LocalChat[]>()
+    for (const chat of this.chats.values()) {
+      if (chat.remoteId) {
+        const existing = byRemoteId.get(chat.remoteId) || []
+        existing.push(chat)
+        byRemoteId.set(chat.remoteId, existing)
+      }
+    }
+
+    // For each group with duplicates, keep one and merge others
+    for (const [remoteId, chats] of byRemoteId.entries()) {
+      if (chats.length <= 1) continue
+
+      // Sort by activity (most recent first) and prefer synced over pending
+      chats.sort((a, b) => {
+        // Prefer synced chats
+        if (a.syncStatus === 'synced' && b.syncStatus !== 'synced') return -1
+        if (b.syncStatus === 'synced' && a.syncStatus !== 'synced') return 1
+        // Then by last activity
+        const aTime = new Date(a.last_message_at || a.updated_at || a.created_at).getTime()
+        const bTime = new Date(b.last_message_at || b.updated_at || b.created_at).getTime()
+        return bTime - aTime
+      })
+
+      const keep = chats[0]
+      const duplicates = chats.slice(1)
+
+      console.log(`🔍 Found ${duplicates.length} duplicate(s) for remoteId ${remoteId}, keeping ${keep.localId}`)
+
+      for (const dup of duplicates) {
+        // Move messages from duplicate to kept chat
+        const dupMessages = this.getMessagesForChat(dup.localId)
+        for (const msg of dupMessages) {
+          // Update message to point to the kept chat
+          msg.chatId = keep.localId
+          msg.remoteChatId = keep.remoteId
+          this.messages.set(msg.localId, msg)
+          merged++
+        }
+
+        // Remove duplicate chat
+        this.chats.delete(dup.localId)
+        this.syncQueue.delete(dup.localId)
+        removed++
+        console.log(`🗑️ Removed duplicate chat ${dup.localId}`)
+      }
+    }
+
+    if (removed > 0 || merged > 0) {
+      this.saveToStorage()
+      console.log(`✅ Deduplication complete: removed ${removed} chats, merged ${merged} messages`)
+    }
+
+    return { removed, merged }
   }
 }
 

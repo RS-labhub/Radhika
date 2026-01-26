@@ -112,7 +112,7 @@ export default function FuturisticRadhika() {
 
   // User personalization settings
   const [userPersonalization, setUserPersonalization] = useState<UserPersonalization>({
-    gender: "boy",
+    gender: "male",
     age: "teenage",
     tone: "friendly",
   })
@@ -904,7 +904,7 @@ export default function FuturisticRadhika() {
         const parsed = JSON.parse(savedPersonalization) as Partial<UserPersonalization>
         if (parsed) {
           setUserPersonalization((prev) => ({
-            gender: parsed.gender && ["boy", "girl", "other"].includes(parsed.gender) ? parsed.gender : prev.gender,
+            gender: parsed.gender && ["male", "female", "other"].includes(parsed.gender) ? parsed.gender : prev.gender,
             age: parsed.age && ["kid", "teenage", "mature", "senior"].includes(parsed.age) ? parsed.age : prev.age,
             tone: parsed.tone && ["professional", "casual", "friendly", "empathetic", "playful"].includes(parsed.tone)
               ? parsed.tone
