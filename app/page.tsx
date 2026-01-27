@@ -1179,6 +1179,10 @@ export default function FuturisticRadhika() {
     if (clearCurrentChat) {
       clearCurrentChat()
     }
+    
+    // Close sidebars on mobile
+    setChatHistoryOpen(false)
+    setNavigationOpen(false)
   }, [setMessages, setError, clearSpeechError, stopSpeaking, clearCurrentChat])
 
   // Load a specific chat
@@ -1220,6 +1224,7 @@ export default function FuturisticRadhika() {
 
       // Close the history drawer
       setChatHistoryOpen(false)
+      setNavigationOpen(false)
     } catch (err) {
       console.error("Failed to load chat:", err)
     }
@@ -2427,6 +2432,15 @@ export default function FuturisticRadhika() {
           allowedModes={allowedModes}
           modeCta={modeUpgradeCta}
           onNewChat={isAuthenticated ? handleNewChat : undefined}
+          onToggleTheme={() => {
+            if (!isMounted) return
+            setTheme(theme === "dark" ? "light" : "dark")
+          }}
+          darkMode={Boolean(isMounted && theme === "dark")}
+          onToggleUI={() => setUIStyle(uiStyle === "modern" ? "pixel" : "modern")}
+          onExportChat={messages.length > 0 ? () => setIsExportDialogOpen(true) : undefined}
+          messageCount={messages.length}
+          onClearChat={!isAuthenticated ? clearChat : undefined}
         />
       </SidebarDrawer>
 
@@ -2606,6 +2620,7 @@ export default function FuturisticRadhika() {
           onRenameChat={handleRenameChat}
           onRefresh={refreshChats}
           isLoading={isLoadingAllChats}
+          onClose={() => setChatHistoryOpen(false)}
         />
       </SidebarDrawer>
 

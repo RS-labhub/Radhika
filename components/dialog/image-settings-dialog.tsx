@@ -207,21 +207,21 @@ export function ImageSettingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "flex max-h-[90vh] w-[92vw] max-w-2xl flex-col overflow-hidden border px-4 py-5 sm:px-6",
+          "flex max-h-[90vh] w-[95vw] max-w-2xl flex-col overflow-hidden border px-3 py-4 sm:px-6 sm:py-5",
           isPixel
             ? "pixel-border pixel-surface pixel-shadow border-slate-500 bg-slate-200 dark:border-slate-600 dark:bg-slate-900"
             : "rounded-2xl border-white/40 bg-white/90 backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/90",
         )}
       >
         <DialogHeader>
-          <DialogTitle className={cn("text-lg font-semibold text-slate-900 dark:text-slate-100", isPixel && "pixel-font text-base")}>Image generation</DialogTitle>
-          <DialogDescription className={cn("text-sm text-slate-500 dark:text-slate-400", isPixel && "pixel-font text-xs")}>
+          <DialogTitle className={cn("text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100", isPixel && "pixel-font text-base sm:text-base")}>Image generation</DialogTitle>
+          <DialogDescription className={cn("text-xs sm:text-sm text-slate-500 dark:text-slate-400", isPixel && "pixel-font text-[10px] sm:text-xs")}>
             Choose a provider, size, and style for generated images. Your chat message is used as the base prompt unless you override it here.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 space-y-5 overflow-y-auto py-4 sm:max-h-[70vh]">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex-1 space-y-4 sm:space-y-5 overflow-y-auto py-3 sm:py-4 sm:max-h-[70vh]">
+          <div className="grid grid-cols-1 gap-3 sm:gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label className={labelClass}>Provider</Label>
               <Select value={currentProvider.id} onValueChange={(value) => handleProviderChange(value as ImageProviderId)}>
@@ -448,13 +448,13 @@ export function ImageSettingsDialog({
           )}
         </div>
 
-        <DialogFooter className="gap-2 flex-col sm:flex-row">
+        <DialogFooter className="flex-row gap-2">
           <Button
             type="button"
             variant="ghost"
             onClick={() => onOpenChange(false)}
             className={cn(
-              "h-10 px-4 w-full sm:w-auto",
+              "h-9 sm:h-10 px-3 sm:px-4 flex-1 sm:flex-none text-sm",
               isPixel
                 ? "pixel-border pixel-shadow border-slate-500 bg-slate-100 text-slate-700 hover:bg-slate-200 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                 : "rounded-xl border-white/40 bg-white/70 text-slate-600 hover:bg-white/80 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-200",
@@ -466,7 +466,7 @@ export function ImageSettingsDialog({
             type="button"
             onClick={handleSave}
             className={cn(
-              "h-10 px-4 w-full sm:w-auto",
+              "h-9 sm:h-10 px-4 sm:px-6 flex-[2] sm:flex-1 text-sm",
               isPixel
                 ? "pixel-border pixel-shadow border-cyan-400 bg-cyan-500 text-white hover:bg-cyan-600"
                 : "rounded-xl bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-lg hover:opacity-90",

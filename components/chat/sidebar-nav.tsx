@@ -5,8 +5,9 @@ import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { useIsMobile } from "@/hooks/use-mobile"
 import type { KeyProvider, Mode, ModeDefinition, UIStyle, UserPersonalization } from "@/types/chat"
-import { Settings, X, UserCircle, Activity, PlusCircle, History, Key } from "lucide-react"
+import { Settings, X, UserCircle, Activity, PlusCircle, History, Key, Moon, Sun, Palette, Gamepad2, Download, Trash2, Github } from "lucide-react"
 
 interface SidebarNavProps {
   mode: Mode
@@ -38,10 +39,18 @@ interface SidebarNavProps {
   showHistoryToggle?: boolean
   historyOpen?: boolean
   onToggleHistory?: () => void
+  // Mobile-specific controls
+  onToggleTheme?: () => void
+  darkMode?: boolean
+  onToggleUI?: () => void
+  onExportChat?: () => void
+  messageCount?: number
+  onClearChat?: () => void
 }
 
-export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAction, modeCounts, uiStyle, onDismiss, onOpenSettings, onOpenPersonalization, onOpenApiKeys, apiKeyProvider = "openai", userPersonalization, isAuthenticated = false, showQuickActions = true, showCloseButton = false, allowedModes, modeCta, showHeatmapToggle = false, heatmapOpen = false, onToggleHeatmap, onNewChat, showHistoryToggle = false, historyOpen = false, onToggleHistory }: SidebarNavProps) {
+export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAction, modeCounts, uiStyle, onDismiss, onOpenSettings, onOpenPersonalization, onOpenApiKeys, apiKeyProvider = "openai", userPersonalization, isAuthenticated = false, showQuickActions = true, showCloseButton = false, allowedModes, modeCta, showHeatmapToggle = false, heatmapOpen = false, onToggleHeatmap, onNewChat, showHistoryToggle = false, historyOpen = false, onToggleHistory, onToggleTheme, darkMode, onToggleUI, onExportChat, messageCount = 0, onClearChat }: SidebarNavProps) {
   const isPixel = uiStyle === "pixel"
+  const isMobile = useIsMobile()
 
   const wrapperClass = cn(
     "relative flex h-full w-full flex-col",
@@ -122,6 +131,41 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
         <div className="flex items-center justify-between">
           <h2 className={sectionTitleClass}>Modes</h2>
           <div className="flex items-center gap-1">
+            {/* Theme toggle - always show */}
+            {onToggleTheme && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={onToggleTheme}
+                className={cn(
+                  "h-7 w-7",
+                  isPixel
+                    ? "pixel-control text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                    : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
+                )}
+                aria-label={darkMode ? "Switch to light mode" : "Switch to dark mode"}
+              >
+                {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </Button>
+            )}
+            {/* GitHub link */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              asChild
+              className={cn(
+                "h-7 w-7",
+                isPixel
+                  ? "pixel-control text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+                  : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
+              )}
+            >
+              <a href="https://github.com/RS-labhub/radhika" target="_blank" rel="noopener noreferrer" aria-label="View on GitHub">
+                <Github className="h-4 w-4" />
+              </a>
+            </Button>
             {showHistoryToggle ? (
               <Button
                 type="button"
@@ -138,24 +182,6 @@ export function SidebarNav({ mode, modes, quickActions, onModeChange, onQuickAct
                 aria-label={historyOpen ? "Hide chat history" : "Show chat history"}
               >
                 <History className="h-4 w-4" />
-              </Button>
-            ) : null}
-            {showHeatmapToggle ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                onClick={onToggleHeatmap}
-                className={cn(
-                  "h-7 w-7",
-                  isPixel
-                    ? "pixel-control text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
-                    : "rounded-lg border border-white/40 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-900 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-slate-800/80 dark:hover:text-white"
-                )}
-                aria-pressed={heatmapOpen}
-                aria-label={heatmapOpen ? "Hide conversation heatmap" : "Show conversation heatmap"}
-              >
-                <Activity className="h-4 w-4" />
               </Button>
             ) : null}
             {!isAuthenticated && onOpenApiKeys ? (

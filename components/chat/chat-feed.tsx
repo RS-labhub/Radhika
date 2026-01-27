@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import type { Components } from "react-markdown"
 import { cn } from "@/lib/utils"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { AIVisualization } from "@/components/ai-visualization"
 import { User, Volume2, VolumeX } from "lucide-react"
 import type { Mode, ModeDefinition, UIStyle, Source } from "@/types/chat"
@@ -64,14 +65,21 @@ export function ChatFeed({
 }: ChatFeedProps) {
   const isPixel = uiStyle === "pixel"
   const CurrentModeIcon = currentMode.icon
+  const isMobile = useIsMobile()
 
   const containerClass = cn(
     "flex flex-1 min-h-0 flex-col overflow-hidden gap-4",
     isPixel
       ? "pixel-panel px-4 py-5 text-slate-700 dark:text-slate-200"
-      : "rounded-[24px] border px-3 py-4 sm:px-5 border-white/60 bg-white/60 backdrop-blur-xl shadow-[0_20px_55px_-32px_rgba(15,23,42,0.4)] dark:border-white/10 dark:bg-slate-900/50",
+      : isMobile 
+        ? "px-0 py-0 h-full"
+        : "rounded-[24px] border px-3 py-4 sm:px-5 border-white/60 bg-white/60 backdrop-blur-xl shadow-[0_20px_55px_-32px_rgba(15,23,42,0.4)] dark:border-white/10 dark:bg-slate-900/50",
   )
-  const markdownStyle = isPixel ? { fontSize: "0.82rem", lineHeight: "1.55" } : undefined
+  const markdownStyle = isPixel 
+    ? { fontSize: "0.82rem", lineHeight: "1.55" } 
+    : isMobile 
+      ? { fontSize: "0.875rem", lineHeight: "1.5" }
+      : undefined
 
   // Flatten possible structured content from the API into plain text or markdown
   const normalizeContent = (content: MessageContent): string => {
@@ -109,6 +117,7 @@ export function ChatFeed({
                 className={cn(
                   "text-xl font-semibold text-slate-900 dark:text-slate-100 sm:text-2xl",
                   isPixel && "pixel-heading text-[1.05rem] text-slate-800 dark:text-slate-100",
+                  isMobile && !isPixel && "text-lg",
                 )}
               >
                 {mode === "bff"
@@ -119,6 +128,7 @@ export function ChatFeed({
                 className={cn(
                   "text-sm text-slate-500 dark:text-slate-400 sm:text-base",
                   isPixel && "pixel-subheading text-[0.75rem] leading-relaxed text-slate-600 dark:text-slate-300",
+                  isMobile && !isPixel && "text-xs",
                 )}
               >
                 Select a quick action or start typing to begin the conversation.
@@ -139,7 +149,9 @@ export function ChatFeed({
                 className={cn(
                   isPixel
                     ? "pixel-tile pixel-quick-action inline-flex items-center gap-2 px-3 py-2 text-[0.78rem] text-slate-700 transition-transform hover:-translate-y-[1px] dark:text-slate-100"
-                    : "rounded-full border border-white/40 bg-white/40 px-4 py-2 text-sm font-medium text-slate-600 hover:border-slate-400 hover:text-slate-900 dark:border-white/10 dark:text-slate-300 dark:hover:text-white dark:bg-slate-900/40 dark:hover:bg-slate-800/60 backdrop-blur",
+                    : isMobile
+                      ? "rounded-full border border-white/40 bg-white/40 px-3 py-1.5 text-xs font-medium text-slate-600 hover:border-slate-400 hover:text-slate-900 dark:border-white/10 dark:text-slate-300 dark:hover:text-white dark:bg-slate-900/40 dark:hover:bg-slate-800/60 backdrop-blur"
+                      : "rounded-full border border-white/40 bg-white/40 px-4 py-2 text-sm font-medium text-slate-600 hover:border-slate-400 hover:text-slate-900 dark:border-white/10 dark:text-slate-300 dark:hover:text-white dark:bg-slate-900/40 dark:hover:bg-slate-800/60 backdrop-blur",
                 )}
               >
                 {isPixel ? (
@@ -156,8 +168,8 @@ export function ChatFeed({
         </div>
       ) : (
         <>
-          <div className="flex-1 min-h-0 overflow-y-auto pr-1 sm:pr-2 scrollbar-thin">
-            <div className="flex flex-col gap-4">
+          <div className={cn("flex-1 min-h-0 overflow-y-auto scrollbar-thin", isMobile ? "px-4 pb-24 pt-2" : "pr-1 sm:pr-2")}>
+            <div className={cn("flex flex-col", isMobile ? "gap-3 py-4" : "gap-4")}>
               {messages.map((message) => {
                 const isUser = message.role === "user"
                 const timestamp = message.createdAt ? new Date(message.createdAt).getTime() : Date.now()
@@ -166,24 +178,26 @@ export function ChatFeed({
                 return (
                   <div
                     key={message.id}
-                    className={cn("flex w-full gap-3", isUser ? "justify-end" : "justify-start")}
+                    className={cn("flex w-full", isMobile ? "gap-2" : "gap-3", isUser ? "justify-end" : "justify-start")}
                   >
-                  {!isUser && (
+                  {!isUser && !isMobile && (
                     <div
                       className={cn(
-                        "mt-1 flex h-9 w-9 flex-shrink-0 items-center justify-center",
+                        "mt-1 flex flex-shrink-0 items-center justify-center",
+                        isMobile ? "h-7 w-7" : "h-9 w-9",
                         isPixel
                           ? "pixel-icon text-slate-800 dark:text-slate-100"
                           : "rounded-2xl border border-white/40 bg-white/80 text-slate-700 shadow-sm dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-100",
                       )}
                     >
-                      <CurrentModeIcon className={cn("h-4 w-4", currentMode.color)} />
+                      <CurrentModeIcon className={cn(isMobile ? "h-3.5 w-3.5" : "h-4 w-4", currentMode.color)} />
                     </div>
                   )}
-                  <div className={cn("max-w-[82%] sm:max-w-[70%] min-w-0", isUser && "flex flex-col items-end")}>
+                  <div className={cn(isMobile ? "max-w-[90%]" : "max-w-[82%] sm:max-w-[70%]", "min-w-0", isUser && "flex flex-col items-end")}>
                     <div
                       className={cn(
-                        "px-4 py-3 text-sm leading-relaxed break-words overflow-wrap-anywhere",
+                        "leading-relaxed break-words overflow-wrap-anywhere",
+                        isMobile ? "px-3 py-2 text-sm" : "px-4 py-3 text-sm",
                         isUser
                           ? isPixel
                             ? cn(
@@ -202,7 +216,7 @@ export function ChatFeed({
                       {isUser ? (
                         <span className={cn("block", isPixel && "text-[0.78rem] font-medium tracking-[0.02em]")}>{normalizedContent}</span>
                       ) : (
-                        <div className="prose prose-sm max-w-none break-words dark:prose-invert [&_*]:break-words [&_pre]:whitespace-pre-wrap [&_code]:break-words" style={markdownStyle}>
+                        <div className={cn("prose max-w-none break-words dark:prose-invert [&_*]:break-words [&_pre]:whitespace-pre-wrap [&_code]:break-words", isMobile ? "prose-base" : "prose-sm")} style={markdownStyle}>
                           <ReactMarkdown 
                             remarkPlugins={[remarkGfm]}
                             components={{
@@ -258,7 +272,8 @@ export function ChatFeed({
                     >
                       <p
                         className={cn(
-                          "text-[11px] uppercase tracking-[0.24em] text-slate-400",
+                          "uppercase tracking-[0.24em] text-slate-400",
+                          isMobile ? "text-[9px]" : "text-[11px]",
                           isPixel && "pixel-label text-[0.6rem] tracking-[0.3em] text-slate-400 dark:text-slate-500",
                         )}
                       >
@@ -302,7 +317,7 @@ export function ChatFeed({
                       )}
                     </div>
                   </div>
-                  {isUser && (
+                  {isUser && !isMobile && (
                     <div
                       className={cn(
                         "mt-1 flex h-9 w-9 flex-shrink-0 items-center justify-center",

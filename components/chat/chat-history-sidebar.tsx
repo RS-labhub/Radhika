@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import { MessageSquare, Trash2, Clock, Loader2, Pencil, Share2 } from "lucide-react"
+import { MessageSquare, Trash2, Clock, Loader2, Pencil, Share2, X } from "lucide-react"
 import type { Chat } from "@/types/chat"
+import { useIsMobile } from "@/hooks/use-mobile"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -29,6 +30,7 @@ interface ChatHistorySidebarProps {
   onRenameChat?: (chatId: string, title: string) => void
   onRefresh?: () => void
   isLoading?: boolean
+  onClose?: () => void
 }
 
 export function ChatHistorySidebar({
@@ -39,7 +41,8 @@ export function ChatHistorySidebar({
   onDeleteAllChats,
   onRefresh,
   onRenameChat,
-  isLoading = false
+  isLoading = false,
+  onClose,
 }: ChatHistorySidebarProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [chatToDelete, setChatToDelete] = useState<string | null>(null)
@@ -47,6 +50,7 @@ export function ChatHistorySidebar({
   const [deleteAllDialogOpen, setDeleteAllDialogOpen] = useState(false)
   const [sharingChatId, setSharingChatId] = useState<string | null>(null)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
+  const isMobile = useIsMobile()
 
   // Deduplicate chats by ID and filter out chats with 0 messages
   // Only filter if message_count is explicitly 0, not if it's undefined/null
