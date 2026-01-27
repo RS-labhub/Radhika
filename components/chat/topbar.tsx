@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import type { Mode, ModeDefinition, UIStyle } from "@/types/chat"
 import Link from "next/link"
 import { useAuth } from "@/contexts/auth-context"
+import { useIsMobile } from "@/hooks/use-mobile"
 import {
   AlertCircle,
   Github,
@@ -23,6 +24,7 @@ import {
   Download,
   Cloud,
   CloudOff,
+  UserCircle,
 } from "lucide-react"
 import { ProfileSelector } from "./profile-selector"
 
@@ -80,12 +82,16 @@ export function ChatTopbar({
 }: ChatTopbarProps) {
   const isPixel = uiStyle === "pixel"
   const CurrentModeIcon = modeMeta.icon
+  const isMobile = useIsMobile()
 
   const surfaceClass = cn(
     "flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between",
+    isMobile && "fixed top-0 left-0 right-0 z-50 w-full",
     isPixel
       ? "pixel-panel px-3 py-3 sm:px-4 text-slate-700 dark:text-slate-200"
-      : "rounded-2xl border border-white/50 bg-white/70 px-3 py-3 sm:px-4 sm:py-3 backdrop-blur-md shadow-[0_12px_34px_-26px_rgba(15,23,42,0.45)] dark:border-white/10 dark:bg-slate-900/60",
+      : isMobile
+        ? "bg-white/98 backdrop-blur-xl border-b border-white/60 dark:bg-slate-900/98 dark:border-white/10 px-4 py-3"
+        : "rounded-2xl border border-white/50 bg-white/70 px-3 py-3 sm:px-4 sm:py-3 backdrop-blur-md shadow-[0_12px_34px_-26px_rgba(15,23,42,0.45)] dark:border-white/10 dark:bg-slate-900/60",
   )
 
   const iconWrapClass = cn(
@@ -110,6 +116,76 @@ export function ChatTopbar({
   return (
     <div className="flex flex-col gap-2">
       <div className={surfaceClass}>
+        {/* Mobile: Simple header with menu, profile selector, and user profile */}
+        {isMobile ? (
+          <div className="flex items-center justify-between w-full">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={onOpenSidebar}
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white",
+                isPixel && "pixel-control text-xs text-slate-700 dark:text-slate-200",
+              )}
+              aria-label="Open navigation"
+            >
+              <Menu className="h-4 w-4" />
+              <span>Menu</span>
+            </Button>
+            
+            <div className="flex items-center gap-2">
+              {onExportChat && messageCount > 0 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={onExportChat}
+                  className={cn(
+                    "h-9 w-9 rounded-full border border-white/40 bg-white/70 text-slate-600 hover:bg-white/90 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-300",
+                    isPixel && "pixel-control"
+                  )}
+                  aria-label="Export chat"
+                  title="Export chat to PDF"
+                >
+                  <Download className="h-4 w-4" />
+                </Button>
+              )}
+              
+              {isAuthenticated && onProfileSelect && (
+                <ProfileSelector
+                  mode={mode}
+                  currentProfileId={currentProfileId}
+                  onProfileSelect={onProfileSelect}
+                  uiStyle={uiStyle}
+                  className=""
+                />
+              )}
+              
+              {isAuthenticated ? (
+                userMenu
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "flex items-center gap-1.5 rounded-full border border-white/40 bg-white/70 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-white/90 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-300",
+                    isPixel && "pixel-control"
+                  )}
+                  asChild
+                >
+                  <Link href="/auth/login" aria-label="Login">
+                    <UserCircle className="h-4 w-4" />
+                    <span>Login</span>
+                  </Link>
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : (
+          /* Desktop: Full header with all info */
+          <>
         <div className="flex items-center gap-2 sm:gap-3">
           <div className={iconWrapClass}>
             <CurrentModeIcon className={cn("h-5 w-5", modeMeta.color)} />
@@ -333,6 +409,8 @@ export function ChatTopbar({
             )}
           </div>
         </div>
+          </>
+        )}
       </div>
 
       {error && (

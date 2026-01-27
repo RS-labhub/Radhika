@@ -14,8 +14,9 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/contexts/auth-context"
+import { useIsMobile } from "@/hooks/use-mobile"
 import type { Provider, ProviderDefinition, UIStyle } from "@/types/chat"
-import { ArrowUp, Check, ChevronDown, Image, Key, Loader2, Mic, MicOff, Settings2, Sparkles, VolumeX } from "lucide-react"
+import { ArrowUp, Check, ChevronDown, Image, Key, Loader2, Mic, MicOff, MoreHorizontal, Settings2, Sparkles, VolumeX } from "lucide-react"
 import type { FormEvent, KeyboardEvent, ChangeEvent } from "react"
 
 interface ChatComposerProps {
@@ -63,6 +64,7 @@ export function ChatComposer({
 }: ChatComposerProps) {
   const isPixel = uiStyle === "pixel"
   const { isAuthenticated } = useAuth()
+  const isMobile = useIsMobile()
 
   const gradientByColor: Record<string, string> = {
     pink: "from-pink-500 to-rose-500",
@@ -80,7 +82,9 @@ export function ChatComposer({
 
   const handleKey = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Enter" && !event.shiftKey) {
+      // On mobile, Enter should add a new line, not submit
+      // On desktop, Enter submits, Shift+Enter adds new line
+      if (event.key === "Enter" && !event.shiftKey && !isMobile) {
         event.preventDefault()
         const form = event.currentTarget.form
         if (form) {
@@ -88,7 +92,7 @@ export function ChatComposer({
         }
       }
     },
-    [],
+    [isMobile],
   )
 
   return (
@@ -100,20 +104,194 @@ export function ChatComposer({
           : "rounded-[24px] border-white/60 bg-white/70 backdrop-blur-xl shadow-[0_22px_58px_-34px_rgba(15,23,42,0.42)] dark:border-white/10 dark:bg-slate-900/60",
       )}
     >
-      <form onSubmit={onSubmit} className="space-y-3">
+      <form onSubmit={onSubmit} className={cn("space-y-3", isMobile && "space-y-0")}>
         <Textarea
           value={input}
           onChange={onInputChange}
           onKeyDown={handleKey}
           placeholder={isPixel ? `${placeholder}`.toUpperCase() : placeholder}
           className={cn(
-            "max-h-40 min-h-[100px] resize-none border px-3 py-3 text-base text-slate-900 shadow-none focus-visible:ring-0 dark:text-white",
+            "resize-none border shadow-none focus-visible:ring-0 dark:text-white",
+            isMobile ? "max-h-32 min-h-[80px] text-sm px-3 py-2.5 rounded-xl" : "max-h-40 min-h-[100px] text-base px-3 py-3",
+            "text-slate-900",
             isPixel
               ? "pixel-border pixel-shadow border-slate-500/80 bg-slate-200 text-slate-800 placeholder-slate-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
               : "rounded-2xl border-white/40 bg-white/70 backdrop-blur placeholder:text-slate-400 focus-visible:border-cyan-400/70 dark:border-white/10 dark:bg-slate-900/60",
           )}
         />
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        
+        {/* Mobile bottom bar - provider, options, send */}
+        {isMobile ? (
+          <div className="flex items-center gap-2 pt-3">
+            {/* Provider selector */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(
+                    "h-9 rounded-xl border px-3 text-xs font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white",
+                    isPixel
+                      ? "pixel-border pixel-shadow border-slate-500/80 bg-slate-200 text-slate-800 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      : "border-white/40 bg-white/70 backdrop-blur hover:bg-white/80 dark:border-white/10 dark:bg-slate-900/60",
+                  )}
+                >
+                  {providers[provider].name}
+                  <ChevronDown className="ml-1.5 h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className={cn(
+                  "w-48 border bg-white/95 backdrop-blur dark:bg-slate-900/95",
+                  isPixel && "pixel-border pixel-shadow border-slate-500/80 bg-slate-200 dark:border-slate-600 dark:bg-slate-900",
+                )}
+              >
+                <DropdownMenuLabel className={cn("text-xs uppercase text-slate-400", isPixel && "pixel-font text-[10px]")}>Providers</DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-700" />
+                {Object.entries(providers).map(([key, meta]) => {
+                  const castKey = key as Provider
+                  const requiresKey = meta.requiresApiKey && !providerApiKeySet[castKey]
+                  const hasModels = meta.models[0]
+                  const isActive = castKey === provider
+
+                  return (
+                    <DropdownMenuItem
+                      key={key}
+                      onClick={() => onProviderChange(castKey)}
+                      className={cn(
+                        "flex items-center justify-between gap-2 text-sm",
+                        isPixel && "pixel-font text-xs",
+                      )}
+                    >
+                      <span className="flex flex-col">
+                        <span className="font-medium text-slate-700 dark:text-slate-100">{meta.name}</span>
+                        {hasModels && (
+                          <span className="text-[11px] text-slate-400 dark:text-slate-500">{meta.models[0]}</span>
+                        )}
+                      </span>
+                      {isActive ? <Check className="h-4 w-4" /> : requiresKey ? <Key className="h-3.5 w-3.5" /> : null}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Three dots menu - options */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className={cn(
+                    "h-9 w-9 rounded-xl border",
+                    isPixel
+                      ? "pixel-border pixel-shadow border-slate-500/80 bg-slate-200 text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                      : "border-white/40 bg-white/70 text-slate-600 backdrop-blur hover:bg-white/80 dark:border-white/10 dark:bg-slate-900/60 dark:text-slate-200",
+                  )}
+                >
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                className={cn(
+                  "w-52 border bg-white/95 backdrop-blur dark:bg-slate-900/95",
+                  isPixel && "pixel-border pixel-shadow border-slate-500/80 bg-slate-200 dark:border-slate-600 dark:bg-slate-900",
+                )}
+              >
+                <DropdownMenuItem
+                  onClick={() => onToggleImageGeneration(!imageGenerationEnabled)}
+                  className="flex items-center justify-between gap-2"
+                >
+                  <span className="flex items-center gap-2">
+                    {imageGenerationEnabled ? <Sparkles className="h-4 w-4" /> : <Image className="h-4 w-4" />}
+                    <span className="text-sm">Image Generation</span>
+                  </span>
+                  {imageGenerationEnabled && <Check className="h-4 w-4 text-cyan-500" />}
+                </DropdownMenuItem>
+                {isAuthenticated && imageGenerationEnabled && (
+                  <DropdownMenuItem onClick={onOpenImageSettings} className="flex items-center gap-2">
+                    <Settings2 className="h-4 w-4" />
+                    <span className="text-sm">Image Settings</span>
+                  </DropdownMenuItem>
+                )}
+                {!isMobile && (
+                  <>
+                    <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-700" />
+                    <DropdownMenuItem
+                      onClick={isSpeaking ? onStopSpeaking : onVoiceInput}
+                      disabled={isLoading}
+                      className="flex items-center gap-2"
+                    >
+                      {isSpeaking ? (
+                        <>
+                          <VolumeX className="h-4 w-4 text-rose-600" />
+                          <span className="text-sm">Stop Speaking</span>
+                        </>
+                      ) : isListening ? (
+                        <>
+                          <MicOff className="h-4 w-4 text-rose-500" />
+                          <span className="text-sm">Stop Listening</span>
+                        </>
+                      ) : (
+                        <>
+                          <Mic className="h-4 w-4" />
+                          <span className="text-sm">Voice Input</span>
+                        </>
+                      )}
+                    </DropdownMenuItem>
+                  </>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Send button */}
+            <div className="ml-auto">
+              {isLoading || isGeneratingImage ? (
+                <Button
+                  type="submit"
+                  size="icon"
+                  className={cn(
+                    "h-9 w-9 rounded-xl border text-white",
+                    isPixel
+                      ? "pixel-border pixel-shadow border-rose-400 bg-rose-600 hover:bg-rose-700"
+                      : "border-none bg-rose-600 shadow-lg hover:bg-rose-700",
+                  )}
+                >
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  disabled={isGeneratingImage || !input || input.trim().length === 0}
+                  className={cn(
+                    "h-9 w-9 rounded-xl border text-white transition-opacity",
+                    isPixel
+                      ? cn(
+                          "pixel-border pixel-shadow",
+                          pixelBgByColor[providers[provider].color] ?? "border-cyan-400 bg-cyan-600",
+                        )
+                      : cn(
+                          "bg-gradient-to-r",
+                          gradientByColor[providers[provider].color] ?? "from-cyan-500 to-blue-600",
+                          "border-none shadow-lg hover:opacity-90",
+                        ),
+                    (isGeneratingImage || !input || input.trim().length === 0) && "opacity-50",
+                  )}
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : (
+          /* Desktop layout */
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          {/* Desktop hint */}
           <div className="hidden sm:flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.32em] text-slate-400 dark:text-slate-500">
             <span className={cn(isPixel && "pixel-font text-[10px]")}>Enter to send</span>
             <span>•</span>
@@ -304,7 +482,8 @@ export function ChatComposer({
               </Button>
             )}
           </div>
-        </div>
+          </div>
+        )}
       </form>
     </div>
   )

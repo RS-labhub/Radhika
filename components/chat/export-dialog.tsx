@@ -73,7 +73,7 @@ export function ExportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Export Chat</DialogTitle>
           <DialogDescription>
@@ -81,7 +81,7 @@ export function ExportDialog({
           </DialogDescription>
         </DialogHeader>
         
-        <div className="grid gap-6 py-4">
+        <div className="grid gap-4 sm:gap-6 py-3 sm:py-4">
           {/* Title */}
           <div className="space-y-2">
             <Label htmlFor="title">Document Title</Label>
@@ -99,8 +99,7 @@ export function ExportDialog({
             <RadioGroup
               value={format}
               onValueChange={(value) => setFormat(value as ExportFormat)}
-              className="grid grid-cols-3 gap-3"
-            >
+              className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <RadioGroupItem
                   value="pdf"
@@ -109,9 +108,9 @@ export function ExportDialog({
                 />
                 <Label
                   htmlFor="pdf"
-                  className="flex flex-col items-center justify-center rounded-lg border-2 border-slate-200 bg-white p-4 hover:bg-slate-50 peer-data-[state=checked]:border-cyan-500 peer-data-[state=checked]:bg-cyan-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:peer-data-[state=checked]:border-cyan-500 dark:peer-data-[state=checked]:bg-cyan-950 cursor-pointer transition-colors"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-slate-200 bg-white p-3 sm:p-4 hover:bg-slate-50 peer-data-[state=checked]:border-cyan-500 peer-data-[state=checked]:bg-cyan-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:peer-data-[state=checked]:border-cyan-500 dark:peer-data-[state=checked]:bg-cyan-950 cursor-pointer transition-colors"
                 >
-                  <FileText className="h-6 w-6 mb-2 text-red-500" />
+                  <FileText className="h-5 w-5 sm:h-6 sm:w-6 mb-2 text-red-500" />
                   <span className="text-sm font-medium">PDF</span>
                 </Label>
               </div>
@@ -123,9 +122,9 @@ export function ExportDialog({
                 />
                 <Label
                   htmlFor="txt"
-                  className="flex flex-col items-center justify-center rounded-lg border-2 border-slate-200 bg-white p-4 hover:bg-slate-50 peer-data-[state=checked]:border-cyan-500 peer-data-[state=checked]:bg-cyan-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:peer-data-[state=checked]:border-cyan-500 dark:peer-data-[state=checked]:bg-cyan-950 cursor-pointer transition-colors"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-slate-200 bg-white p-3 sm:p-4 hover:bg-slate-50 peer-data-[state=checked]:border-cyan-500 peer-data-[state=checked]:bg-cyan-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:peer-data-[state=checked]:border-cyan-500 dark:peer-data-[state=checked]:bg-cyan-950 cursor-pointer transition-colors"
                 >
-                  <FileIcon className="h-6 w-6 mb-2 text-slate-500" />
+                  <FileIcon className="h-5 w-5 sm:h-6 sm:w-6 mb-2 text-slate-500" />
                   <span className="text-sm font-medium">Text</span>
                 </Label>
               </div>
@@ -137,9 +136,9 @@ export function ExportDialog({
                 />
                 <Label
                   htmlFor="doc"
-                  className="flex flex-col items-center justify-center rounded-lg border-2 border-slate-200 bg-white p-4 hover:bg-slate-50 peer-data-[state=checked]:border-cyan-500 peer-data-[state=checked]:bg-cyan-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:peer-data-[state=checked]:border-cyan-500 dark:peer-data-[state=checked]:bg-cyan-950 cursor-pointer transition-colors"
+                  className="flex flex-col items-center justify-center rounded-lg border-2 border-slate-200 bg-white p-3 sm:p-4 hover:bg-slate-50 peer-data-[state=checked]:border-cyan-500 peer-data-[state=checked]:bg-cyan-50 dark:border-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:peer-data-[state=checked]:border-cyan-500 dark:peer-data-[state=checked]:bg-cyan-950 cursor-pointer transition-colors"
                 >
-                  <FileType className="h-6 w-6 mb-2 text-blue-500" />
+                  <FileType className="h-5 w-5 sm:h-6 sm:w-6 mb-2 text-blue-500" />
                   <span className="text-sm font-medium">Word</span>
                 </Label>
               </div>
@@ -170,17 +169,11 @@ export function ExportDialog({
           </div>
         </div>
 
-        <DialogFooter>
-          <Button
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
+        <DialogFooter className="flex-row gap-2 sm:gap-0">
           <Button
             onClick={handleExport}
             disabled={isExporting}
-            className="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white"
+            className="flex-[2] sm:flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white"
           >
             {isExporting ? (
               <>
@@ -193,6 +186,13 @@ export function ExportDialog({
                 Export
               </>
             )}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            className="flex-1 sm:flex-none"
+          >
+            Cancel
           </Button>
         </DialogFooter>
       </DialogContent>
