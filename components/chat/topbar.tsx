@@ -368,18 +368,6 @@ export function ChatTopbar({
               <Trash2 className="h-4 w-4" />
             </Button>
           )}
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn(controlButton, "hidden sm:inline-flex")}
-            asChild
-            aria-label="View source on GitHub"
-          >
-            <a href="https://github.com/RS-labhub/radhika" target="_blank" rel="noopener noreferrer">
-              <Github className="h-4 w-4" />
-            </a>
-          </Button>
           {/* Right-side group: profile selector + user menu / get full access */}
           <div className="ml-auto flex items-center gap-2 order-4 sm:order-none">
             {isAuthenticated && onProfileSelect && (
@@ -404,7 +392,7 @@ export function ChatTopbar({
                 )}
                 asChild
               >
-                <Link href="/auth/login">Get full access</Link>
+                <Link href="/auth/login">Login/Signup</Link>
               </Button>
             )}
           </div>
