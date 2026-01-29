@@ -85,6 +85,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/three": "^0.177.0",
+    "baseline-browser-mapping": "^2.9.19",
     "postcss": "^8.5",
     "tailwindcss": "^3.4.17",
     "typescript": "^5"
