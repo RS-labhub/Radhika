@@ -6,6 +6,13 @@ A modern AI assistant that adapts to how you work and think. Multiple modes, mul
 
 **Try now**: https://radhika-sharma.vercel.app
 
+## Detailed Explanation
+
+| Preview             | Description        |
+|---------------------|--------------------|
+| [![Blog Post](https://raw.githubusercontent.com/RS-labhub/Radhika/master/public/cover-image.png)](https://dev.to/rohan_sharma/creating-a-chatbot-that-actually-stands-out-vibe-coded-version-draft-1ake) | **Blog Post**<br>Read the blog for in-depth explanation. |
+| [![YouTube Demo](https://raw.githubusercontent.com/RS-labhub/Radhika/master/public/youtube-thumbnail.jpg)](https://radhika-sharma.vercel.app) | **YouTube Demo**<br>Coming soon. |
+
 ## Features
 
 - **6 Chat Modes**: General, Productivity, Wellness, Learning, Creative, BFF
