@@ -19,7 +19,7 @@ A modern AI assistant that adapts to how you work and think. Multiple modes, mul
 - **Multi-Provider LLM**: Groq, Gemini, OpenAI, Claude
 - **Image Generation**: Pollinations, DALL·E 3, Hugging Face, Free alternatives
 - **Voice**: Speech-to-text input & text-to-speech output
-- **Auth & Persistence**: Appwrite auth with chat history & favorites
+- **Auth & Persistence**: Supabase auth with chat history & favorites
 - **UI**: Light/dark themes, modern & pixel UI styles
 
 ## Quick Start

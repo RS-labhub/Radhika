@@ -348,7 +348,7 @@ export default function FuturisticRadhika() {
       try {
         const parsed = JSON.parse(storedModels) as Partial<ProviderModelMap>
         setModelPreferences((prev) => ({
-          groq: parsed.groq || prev.groq,
+          groq: parsed.groq && PROVIDERS.groq.models.includes(parsed.groq) ? parsed.groq : prev.groq,
           gemini: parsed.gemini || prev.gemini,
           openai: parsed.openai || prev.openai,
           claude: parsed.claude || prev.claude,
@@ -385,7 +385,7 @@ export default function FuturisticRadhika() {
   useEffect(() => {
     if (typeof window === "undefined" || !isAuthenticated || !user) return
     try {
-      const key = `radhika-selected-provider:${user.$id}`
+      const key = `radhika-selected-provider:${user.id}`
       const saved = localStorage.getItem(key)
       if (saved && Object.prototype.hasOwnProperty.call(PROVIDERS, saved)) setProvider(saved as Provider)
     } catch { /* ignore */ }
@@ -583,7 +583,7 @@ export default function FuturisticRadhika() {
       setProvider(nextProvider)
       try {
         if (isAuthenticated && user && typeof window !== "undefined") {
-          localStorage.setItem(`radhika-selected-provider:${user.$id}`, nextProvider)
+          localStorage.setItem(`radhika-selected-provider:${user.id}`, nextProvider)
         }
       } catch { /* ignore */ }
       setModelPreferences((prev) => ({

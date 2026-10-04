@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
+import type { EmailOtpType } from "@supabase/supabase-js"
+import { getSupabaseClient } from "@/lib/supabase/client"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -16,36 +18,35 @@ export default function ConfirmClient() {
 
   useEffect(() => {
     const confirmEmail = async () => {
-      const userId = searchParams.get("userId")
-      const secret = searchParams.get("secret")
+      const supabase = getSupabaseClient()
+      const tokenHash = searchParams.get("token_hash")
+      const type = searchParams.get("type") as EmailOtpType | null
+      const urlError = searchParams.get("error_description")
 
-      if (!userId || !secret) {
+      if (urlError) {
         setStatus("error")
-        setMessage("Invalid confirmation link. Please check your email and try again.")
+        setMessage(urlError)
         return
       }
 
       try {
-        const response = await fetch("/api/auth/confirm", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ userId, secret }),
-        })
+        if (tokenHash && type) {
+          const { error } = await supabase.auth.verifyOtp({ type, token_hash: tokenHash })
+          if (error) throw error
+        }
 
-        const data = await response.json()
+        const { data } = await supabase.auth.getSession()
 
-        if (response.ok) {
+        if (data.session) {
           setStatus("success")
-          setMessage("Your email has been successfully verified! You can now sign in to your account.")
+          setMessage("Your email has been successfully verified! You are now signed in.")
         } else {
           setStatus("error")
-          setMessage(data.error || "Failed to verify your email. The link may have expired.")
+          setMessage("Invalid or expired confirmation link. Please check your email and try again.")
         }
       } catch (error) {
         setStatus("error")
-        setMessage("An unexpected error occurred. Please try again later.")
+        setMessage(error instanceof Error ? error.message : "Failed to verify your email. The link may have expired.")
       }
     }
 
@@ -110,10 +111,10 @@ export default function ConfirmClient() {
         <CardContent className="space-y-4">
           {status === "success" && (
             <Button 
-              onClick={() => router.push("/auth/login")}
+              onClick={() => router.push("/")}
               className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white"
             >
-              Sign In
+              Continue
             </Button>
           )}
 

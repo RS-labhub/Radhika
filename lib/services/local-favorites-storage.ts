@@ -3,10 +3,10 @@
  * 
  * This service implements a local-first approach where:
  * 1. ALL favorites are stored in localStorage FIRST
- * 2. Sync to Appwrite happens in the background (non-blocking)
+ * 2. Sync to Supabase happens in the background (non-blocking)
  * 3. Favorites list is always available from localStorage
  * 4. No loading states that block the UI
- * 5. Graceful merge when Appwrite data becomes available
+ * 5. Graceful merge when remote data becomes available
  */
 
 import type { Mode } from '@/types/chat'
@@ -14,11 +14,11 @@ import type { Mode } from '@/types/chat'
 export interface LocalFavorite {
   id: string
   localId: string
-  remoteId?: string // Appwrite favorites table ID once synced
+  remoteId?: string // Favorites row ID once synced
   messageId: string // Local message ID
-  remoteMessageId?: string // Appwrite message ID
+  remoteMessageId?: string // Remote message ID
   chatId: string // Local chat ID
-  remoteChatId?: string // Appwrite chat ID
+  remoteChatId?: string // Remote chat ID
   content: string
   role: 'user' | 'assistant' | 'system'
   mode?: Mode
@@ -493,7 +493,7 @@ class LocalFavoritesStorageService {
       } else {
         // Message not synced yet - this is NORMAL for local-first
         // Return false to keep in queue and retry later
-        console.log('⏳ [Favorites] Message not synced to Appwrite yet, will retry later:', favorite.messageId)
+        console.log('⏳ [Favorites] Message not synced yet, will retry later:', favorite.messageId)
         return false
       }
     }
@@ -504,10 +504,7 @@ class LocalFavoritesStorageService {
     const response = await fetch('/api/favorites', {
       method: 'POST',
       credentials: 'include',
-      headers: { 
-        'Content-Type': 'application/json',
-        ...(this.currentUserId ? { 'x-user-id': this.currentUserId } : {}),
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messageId: remoteMessageId }),
     })
 
@@ -545,9 +542,6 @@ class LocalFavoritesStorageService {
     const response = await fetch(`/api/favorites?messageId=${remoteMessageId}`, {
       method: 'DELETE',
       credentials: 'include',
-      headers: {
-        ...(this.currentUserId ? { 'x-user-id': this.currentUserId } : {}),
-      },
     })
 
     if (!response.ok && response.status !== 404) {
@@ -561,24 +555,24 @@ class LocalFavoritesStorageService {
   // ============ Remote Data Merge ============
 
   /**
-   * Merge favorites from Appwrite (called after fetching from server)
+   * Merge favorites from the server (called after fetching)
    * Deduplicates by content+role to avoid showing duplicate messages
    */
   mergeRemoteFavorites(remoteFavorites: Array<{
     id: string
     message_id: string
     created_at: string
-    chat_messages?: {
+    message?: {
       id: string
       content: string
       role: string
       created_at: string
-      chats?: {
+      chat?: {
         id: string
         title: string
         mode: string
-      }
-    }
+      } | null
+    } | null
   }>) {
     let added = 0
     let updated = 0
@@ -594,19 +588,19 @@ class LocalFavoritesStorageService {
     }
 
     for (const remote of remoteFavorites) {
-      if (!remote.chat_messages) {
+      if (!remote.message) {
         skipped++
         continue
       }
 
-      const contentKey = `${remote.chat_messages.content}|${remote.chat_messages.role}`
+      const contentKey = `${remote.message.content}|${remote.message.role}`
       
       // Skip if we've already processed this content (duplicate in remote)
       if (seenContent.has(contentKey)) {
         // But update the existing one with remote IDs if needed
         const existing = Array.from(this.favorites.values()).find(
-          fav => fav.content === remote.chat_messages!.content && 
-                 fav.role === remote.chat_messages!.role
+          fav => fav.content === remote.message!.content && 
+                 fav.role === remote.message!.role
         )
         if (existing && !existing.remoteId) {
           existing.remoteId = remote.id
@@ -653,13 +647,13 @@ class LocalFavoritesStorageService {
           remoteId: remote.id,
           messageId: remote.message_id,
           remoteMessageId: remote.message_id,
-          chatId: remote.chat_messages.chats?.id || '',
-          remoteChatId: remote.chat_messages.chats?.id,
-          content: remote.chat_messages.content,
-          role: remote.chat_messages.role as 'user' | 'assistant' | 'system',
-          mode: remote.chat_messages.chats?.mode as Mode,
-          chatTitle: remote.chat_messages.chats?.title,
-          createdAt: remote.chat_messages.created_at,
+          chatId: remote.message.chat?.id || '',
+          remoteChatId: remote.message.chat?.id,
+          content: remote.message.content,
+          role: remote.message.role as 'user' | 'assistant' | 'system',
+          mode: remote.message.chat?.mode as Mode,
+          chatTitle: remote.message.chat?.title,
+          createdAt: remote.message.created_at,
           favoritedAt: remote.created_at,
           syncStatus: 'synced',
           lastSyncAt: new Date().toISOString(),

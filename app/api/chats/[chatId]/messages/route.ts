@@ -1,24 +1,18 @@
 import { NextRequest } from "next/server"
-import { createServerAppwriteClient, createServiceClient, Query, ID, Permission, Role } from "../../../../../lib/appwrite/server"
-import { APPWRITE_CONFIG } from "../../../../../lib/appwrite/config"
-import { errorResponse, successResponse } from "../../../../../lib/api-utils"
+import { createServiceRoleClient } from "@/lib/supabase/server"
+import { getAuthenticatedUser, errorResponse, successResponse } from "@/lib/api-utils"
 
-// Helper to get user from session or header
-async function getUser(request: NextRequest, account: any, serviceClient: any) {
-  try {
-    return await account.get()
-  } catch (error: any) {
-    // Try to get user ID from header as fallback
-    const userIdHeader = request.headers.get('x-user-id')
-    if (userIdHeader) {
-      try {
-        return await serviceClient.users.get(userIdHeader)
-      } catch {
-        return null
-      }
-    }
-    return null
-  }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+async function userOwnsChat(supabase: ReturnType<typeof createServiceRoleClient>, chatId: string, userId: string) {
+  if (!UUID_RE.test(chatId)) return false
+  const { data, error } = await supabase
+    .from("chats")
+    .select("id")
+    .eq("id", chatId)
+    .eq("user_id", userId)
+    .maybeSingle()
+  return !error && !!data
 }
 
 // GET /api/chats/[chatId]/messages - Get all messages for a chat
@@ -27,69 +21,57 @@ export async function GET(
   { params }: { params: Promise<{ chatId: string }> }
 ) {
   try {
-    const { account } = await createServerAppwriteClient()
-    const serviceClient = createServiceClient()
     const { chatId } = await params
 
-    // Auth check
-    const user = await getUser(request, account, serviceClient)
+    const user = await getAuthenticatedUser()
     if (!user) {
       return errorResponse("Unauthorized", 401)
     }
 
-    // Get query params
     const searchParams = request.nextUrl.searchParams
-    const limit = Math.min(parseInt(searchParams.get("limit") || "100", 10), 1000)
+    const limit = Math.min(parseInt(searchParams.get("limit") || "100", 10) || 100, 1000)
     const direction = searchParams.get("direction") || "asc"
     const cursor = searchParams.get("cursor")
 
-    // Verify chat ownership using service client
-    try {
-      const chat = await serviceClient.databases.getDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.chats,
-        chatId
-      )
-      
-      if (chat.user_id !== user.$id) {
-        return errorResponse("Chat not found", 404)
-      }
-    } catch {
+    const supabase = createServiceRoleClient()
+
+    if (!(await userOwnsChat(supabase, chatId, user.id))) {
       return errorResponse("Chat not found", 404)
     }
 
-    // Build queries
-    const queries = [
-      Query.equal("chat_id", chatId),
-      Query.limit(limit),
-    ]
-
-    if (direction === "asc") {
-      queries.push(Query.orderAsc("created_at"))
-    } else {
-      queries.push(Query.orderDesc("created_at"))
-    }
+    const ascending = direction === "asc"
+    let query = supabase
+      .from("chat_messages")
+      .select("id, chat_id, role, content, metadata, is_favorite, created_at")
+      .eq("chat_id", chatId)
+      .order("seq_num", { ascending })
+      .limit(limit)
 
     if (cursor) {
-      queries.push(Query.cursorAfter(cursor))
+      if (!UUID_RE.test(cursor)) {
+        return errorResponse("Invalid cursor", 400)
+      }
+
+      const { data: cursorRow, error: cursorError } = await supabase
+        .from("chat_messages")
+        .select("seq_num")
+        .eq("id", cursor)
+        .eq("chat_id", chatId)
+        .maybeSingle()
+
+      if (cursorError || !cursorRow) {
+        return errorResponse("Invalid cursor", 400)
+      }
+
+      query = ascending ? query.gt("seq_num", cursorRow.seq_num) : query.lt("seq_num", cursorRow.seq_num)
     }
 
-    // Fetch messages using service client
-    const result = await serviceClient.databases.listDocuments(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.chatMessages,
-      queries
-    )
+    const { data, error } = await query
+    if (error) throw error
 
-    // Map documents
-    const messages = result.documents.map((doc: any) => ({
-      id: doc.$id,
-      chat_id: doc.chat_id,
-      role: doc.role,
-      content: doc.content,
-      metadata: doc.metadata,
-      is_favorite: doc.is_favorite || false,
-      created_at: doc.created_at || doc.$createdAt,
+    const messages = (data || []).map((msg: any) => ({
+      ...msg,
+      is_favorite: msg.is_favorite || false,
     }))
 
     return successResponse({ messages })
@@ -105,12 +87,9 @@ export async function POST(
   { params }: { params: Promise<{ chatId: string }> }
 ) {
   try {
-    const { account } = await createServerAppwriteClient()
-    const serviceClient = createServiceClient()
     const { chatId } = await params
 
-    // Auth check
-    const user = await getUser(request, account, serviceClient)
+    const user = await getAuthenticatedUser()
     if (!user) {
       return errorResponse("Unauthorized", 401)
     }
@@ -126,68 +105,25 @@ export async function POST(
       return errorResponse("Invalid role", 400)
     }
 
-    // Verify chat ownership using service client
-    try {
-      const chat = await serviceClient.databases.getDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.chats,
-        chatId
-      )
-      
-      if (chat.user_id !== user.$id) {
-        return errorResponse("Chat not found", 404)
-      }
-    } catch {
+    const supabase = createServiceRoleClient()
+
+    if (!(await userOwnsChat(supabase, chatId, user.id))) {
       return errorResponse("Chat not found", 404)
     }
 
-    // Create message using service client with user permissions
-    // Serialize metadata to JSON string if it's an object
-    const serializedMetadata = metadata 
-      ? (typeof metadata === 'string' ? metadata : JSON.stringify(metadata))
-      : null
-
-    const message = await serviceClient.databases.createDocument(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.chatMessages,
-      ID.unique(),
-      {
+    // Chat message_count, last_message_at and last_message_preview are maintained by a DB trigger
+    const { data: message, error } = await supabase
+      .from("chat_messages")
+      .insert({
         chat_id: chatId,
         role,
         content,
-        metadata: serializedMetadata,
-        is_favorite: false,
-        created_at: new Date().toISOString()
-      },
-      [
-        Permission.read(Role.user(user.$id)),
-        Permission.update(Role.user(user.$id)),
-        Permission.delete(Role.user(user.$id))
-      ]
-    )
+        metadata: metadata ?? {},
+      })
+      .select()
+      .single()
 
-    // Update chat's last_message_at, message_count, and last_message_preview
-    try {
-      // Get current message count
-      const messagesCount = await serviceClient.databases.listDocuments(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.chatMessages,
-        [Query.equal("chat_id", chatId), Query.limit(1)]
-      )
-      
-      await serviceClient.databases.updateDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.chats,
-        chatId,
-        { 
-          last_message_at: new Date().toISOString(),
-          last_message_preview: content.substring(0, 200),
-          message_count: messagesCount.total
-        }
-      )
-    } catch (err) {
-      console.warn("Failed to update chat metadata:", err)
-    }
+    if (error) throw error
 
     return successResponse({ message }, 201)
   } catch (error) {
@@ -202,12 +138,9 @@ export async function PATCH(
   { params }: { params: Promise<{ chatId: string }> }
 ) {
   try {
-    const { account } = await createServerAppwriteClient()
-    const serviceClient = createServiceClient()
     const { chatId } = await params
 
-    // Auth check
-    const user = await getUser(request, account, serviceClient)
+    const user = await getAuthenticatedUser()
     if (!user) {
       return errorResponse("Unauthorized", 401)
     }
@@ -219,29 +152,28 @@ export async function PATCH(
       return errorResponse("Message ID and is_favorite are required", 400)
     }
 
-    // Verify message exists and belongs to the chat using service client
-    let message
-    try {
-      message = await serviceClient.databases.getDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.chatMessages,
-        messageId
-      )
-      
-      if (message.chat_id !== chatId) {
-        return errorResponse("Message not found", 404)
-      }
-    } catch {
+    const supabase = createServiceRoleClient()
+
+    if (
+      typeof messageId !== "string" ||
+      !UUID_RE.test(messageId) ||
+      !(await userOwnsChat(supabase, chatId, user.id))
+    ) {
       return errorResponse("Message not found", 404)
     }
 
-    // Update the message using service client
-    const updatedMessage = await serviceClient.databases.updateDocument(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.chatMessages,
-      messageId,
-      { is_favorite }
-    )
+    const { data: updatedMessage, error } = await supabase
+      .from("chat_messages")
+      .update({ is_favorite })
+      .eq("id", messageId)
+      .eq("chat_id", chatId)
+      .select()
+      .maybeSingle()
+
+    if (error) throw error
+    if (!updatedMessage) {
+      return errorResponse("Message not found", 404)
+    }
 
     return successResponse({ message: updatedMessage })
   } catch (error) {

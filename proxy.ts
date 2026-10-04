@@ -1,9 +1,8 @@
-import { type NextRequest, NextResponse } from 'next/server'
+import { type NextRequest } from 'next/server'
+import { updateSession } from '@/lib/supabase/middleware'
 
 export async function proxy(request: NextRequest) {
-  // Appwrite handles session management via cookies automatically
-  // This middleware is kept for compatibility but doesn't modify the request
-  return NextResponse.next()
+  return await updateSession(request)
 }
 
 export const config = {

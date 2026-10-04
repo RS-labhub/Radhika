@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useAuth } from "@/contexts/auth-context"
+import { useAuth, getUserDisplayName } from "@/contexts/auth-context"
 import { useFeatureAccess } from "@/hooks/use-feature-access"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -73,9 +73,6 @@ export default function DashboardPage() {
       try {
         const response = await fetch("/api/users", {
           credentials: 'include',
-          headers: {
-            'x-user-id': user.$id,
-          },
         })
         if (response.ok) {
           const data = await response.json()
@@ -94,10 +91,10 @@ export default function DashboardPage() {
 
   // Load cached data from sessionStorage on mount
   useEffect(() => {
-    if (typeof window === 'undefined' || !user?.$id) return
+    if (typeof window === 'undefined' || !user?.id) return
     
     try {
-      const cacheKey = `dashboard-cache-${user.$id}`
+      const cacheKey = `dashboard-cache-${user.id}`
       const cached = sessionStorage.getItem(cacheKey)
       if (cached) {
         const { chats, profiles: cachedProfiles, stats: cachedStats, timestamp } = JSON.parse(cached)
@@ -113,7 +110,7 @@ export default function DashboardPage() {
     } catch (e) {
       // Ignore cache errors
     }
-  }, [user?.$id])
+  }, [user?.id])
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -149,7 +146,7 @@ export default function DashboardPage() {
   }, [loadError])
 
   // SessionStorage cache key and duration
-  const CACHE_KEY = `dashboard_data_${user?.$id || 'anon'}`
+  const CACHE_KEY = `dashboard_data_${user?.id || 'anon'}`
   const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes - data will be fresh for this duration
 
   const loadFromCache = () => {
@@ -183,7 +180,7 @@ export default function DashboardPage() {
     const controller = new AbortController()
     
     const fetchData = async () => {
-      if (!user?.$id) {
+      if (!user?.id) {
         setIsLoading(false)
         return
       }
@@ -214,9 +211,9 @@ export default function DashboardPage() {
         }, 15000) // Reduced to 15 seconds
         
         const [chatsData, profilesData, statsData] = await Promise.all([
-          getRecentChats(user.$id, 5),
-          getProfiles(user.$id),
-          getChatStats(user.$id),
+          getRecentChats(user.id, 5),
+          getProfiles(user.id),
+          getChatStats(user.id),
         ])
 
         clearTimeout(safetyTimeout)
@@ -254,7 +251,7 @@ export default function DashboardPage() {
     return () => {
       controller.abort()
     }
-  }, [user?.$id, hasLoadedOnce, retryCount])
+  }, [user?.id, hasLoadedOnce, retryCount])
 
   // Manual retry function - clears cache to force fresh fetch
   const handleRetry = () => {
@@ -314,8 +311,8 @@ export default function DashboardPage() {
     )
   }
 
-  const displayName = user?.name || user?.email?.split("@")[0] || "User"
-  const initials = (user?.name || user?.email?.split("@")[0] || "User").slice(0, 2).toUpperCase()
+  const displayName = getUserDisplayName(user) || user?.email?.split("@")[0] || "User"
+  const initials = displayName.slice(0, 2).toUpperCase()
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-100 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950">

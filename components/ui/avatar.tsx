@@ -54,7 +54,7 @@ AvatarFallback.displayName = AvatarPrimitive.Fallback.displayName
 /**
  * Resolve an avatar URL which may be:
  * - A full URL (http/https/blob) - returned as-is
- * - An Appwrite file ID - converted to full URL
+ * - A Supabase storage path - converted to full public URL
  * - null/undefined - returned as undefined
  */
 export function resolveAvatarUrl(avatarUrl?: string | null): string | undefined {
@@ -74,22 +74,19 @@ export function resolveAvatarUrl(avatarUrl?: string | null): string | undefined 
     return undefined
   }
   
-  // It's likely an Appwrite file ID - convert to full URL
-  const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || ''
-  const bucketId = process.env.NEXT_PUBLIC_APPWRITE_AVATARS_BUCKET_ID || 'avatars'
-  const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1'
-  
-  // If we don't have a project ID, we can't construct a valid URL
-  if (!projectId) {
-    console.warn('Missing NEXT_PUBLIC_APPWRITE_PROJECT_ID for avatar URL resolution')
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const bucket = process.env.NEXT_PUBLIC_SUPABASE_AVATAR_BUCKET || 'avatars'
+
+  if (!supabaseUrl) {
+    console.warn('Missing NEXT_PUBLIC_SUPABASE_URL for avatar URL resolution')
     return undefined
   }
-  
-  return `${endpoint}/storage/buckets/${bucketId}/files/${avatarUrl}/view?project=${projectId}`
+
+  return `${supabaseUrl}/storage/v1/object/public/${bucket}/${avatarUrl}`
 }
 
 interface UserAvatarProps {
-  /** Avatar URL - can be full URL or Appwrite file ID */
+  /** Avatar URL - can be full URL or Supabase storage path */
   avatarUrl?: string | null
   /** User's name for generating initials fallback */
   name?: string | null
@@ -137,7 +134,7 @@ function getInitials(name?: string | null, email?: string | null): string {
  * UserAvatar - A reusable avatar component for displaying user profiles
  * 
  * Features:
- * - Handles avatar URL from Appwrite or external sources
+ * - Handles avatar URL from Supabase storage or external sources
  * - Generates initials fallback from name or email
  * - Supports multiple sizes
  * - Supports pixel styling for retro UI

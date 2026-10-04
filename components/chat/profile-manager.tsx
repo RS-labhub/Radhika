@@ -76,8 +76,7 @@ export function ProfileManager({
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Get user ID (Appwrite uses $id)
-  const userId = user?.$id
+  const userId = user?.id
 
   // Fetch profiles for the current mode
   useEffect(() => {

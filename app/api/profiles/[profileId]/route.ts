@@ -1,26 +1,18 @@
 import { NextRequest, NextResponse } from "next/server"
-import { createServerAppwriteClient, createServiceClient } from "../../../../lib/appwrite/server"
-import { APPWRITE_CONFIG } from "../../../../lib/appwrite/config"
+import { createServiceRoleClient } from "@/lib/supabase/server"
+import { getAuthenticatedUser } from "@/lib/api-utils"
 
-// Helper to get user from session or x-user-id header
-async function getAuthUser(request: NextRequest) {
-  const { account } = await createServerAppwriteClient()
-  const serviceClient = createServiceClient()
-  
-  try {
-    return await account.get()
-  } catch (error: any) {
-    // Try to get user ID from header as fallback
-    const userIdHeader = request.headers.get('x-user-id')
-    if (userIdHeader) {
-      try {
-        return await serviceClient.users.get(userIdHeader)
-      } catch {
-        return null
-      }
-    }
-    return null
-  }
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+async function findOwnedProfile(supabase: ReturnType<typeof createServiceRoleClient>, profileId: string, userId: string) {
+  if (!UUID_RE.test(profileId)) return null
+  const { data, error } = await supabase
+    .from("chat_profiles")
+    .select("*")
+    .eq("id", profileId)
+    .eq("user_id", userId)
+    .maybeSingle()
+  return error ? null : data
 }
 
 // GET /api/profiles/[profileId] - Get a specific profile
@@ -29,27 +21,15 @@ export async function GET(
   { params }: { params: Promise<{ profileId: string }> }
 ) {
   try {
-    const serviceClient = createServiceClient()
     const { profileId } = await params
 
-    const user = await getAuthUser(request)
+    const user = await getAuthenticatedUser()
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    let profile
-    try {
-      profile = await serviceClient.databases.getDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.chatProfiles,
-        profileId
-      )
-      
-      // Verify ownership
-      if (profile.user_id !== user.$id) {
-        return NextResponse.json({ error: "Profile not found" }, { status: 404 })
-      }
-    } catch {
+    const profile = await findOwnedProfile(createServiceRoleClient(), profileId, user.id)
+    if (!profile) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 })
     }
 
@@ -69,26 +49,17 @@ export async function PATCH(
   { params }: { params: Promise<{ profileId: string }> }
 ) {
   try {
-    const serviceClient = createServiceClient()
     const { profileId } = await params
 
-    const user = await getAuthUser(request)
+    const user = await getAuthenticatedUser()
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Verify ownership first using service client
-    try {
-      const profile = await serviceClient.databases.getDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.chatProfiles,
-        profileId
-      )
-      
-      if (profile.user_id !== user.$id) {
-        return NextResponse.json({ error: "Profile not found" }, { status: 404 })
-      }
-    } catch {
+    const supabase = createServiceRoleClient()
+
+    const profile = await findOwnedProfile(supabase, profileId, user.id)
+    if (!profile) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 })
     }
 
@@ -109,14 +80,18 @@ export async function PATCH(
       )
     }
 
-    updates.updated_at = new Date().toISOString()
+    const { data: updatedProfile, error } = await supabase
+      .from("chat_profiles")
+      .update(updates)
+      .eq("id", profileId)
+      .eq("user_id", user.id)
+      .select()
+      .maybeSingle()
 
-    const updatedProfile = await serviceClient.databases.updateDocument(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.chatProfiles,
-      profileId,
-      updates
-    )
+    if (error) throw error
+    if (!updatedProfile) {
+      return NextResponse.json({ error: "Profile not found" }, { status: 404 })
+    }
 
     return NextResponse.json({ profile: updatedProfile })
   } catch (error) {
@@ -134,34 +109,27 @@ export async function DELETE(
   { params }: { params: Promise<{ profileId: string }> }
 ) {
   try {
-    const serviceClient = createServiceClient()
     const { profileId } = await params
 
-    const user = await getAuthUser(request)
+    const user = await getAuthenticatedUser()
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Verify ownership first using service client
-    try {
-      const profile = await serviceClient.databases.getDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.chatProfiles,
-        profileId
-      )
-      
-      if (profile.user_id !== user.$id) {
-        return NextResponse.json({ error: "Profile not found" }, { status: 404 })
-      }
-    } catch {
+    const supabase = createServiceRoleClient()
+
+    const profile = await findOwnedProfile(supabase, profileId, user.id)
+    if (!profile) {
       return NextResponse.json({ error: "Profile not found" }, { status: 404 })
     }
 
-    await serviceClient.databases.deleteDocument(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.chatProfiles,
-      profileId
-    )
+    const { error } = await supabase
+      .from("chat_profiles")
+      .delete()
+      .eq("id", profileId)
+      .eq("user_id", user.id)
+
+    if (error) throw error
 
     return NextResponse.json({ success: true })
   } catch (error) {

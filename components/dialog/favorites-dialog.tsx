@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { chatService } from "@/lib/appwrite/chat-service"
+import { chatService } from "@/lib/supabase/chat-service"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 
@@ -20,7 +20,7 @@ interface FavoriteItem {
   id: string
   message_id: string
   created_at: string
-  chat_messages: {
+  message: {
     id: string
     content: string
     role: string
@@ -118,10 +118,10 @@ export function FavoritesDialog({ children, open, onOpenChange }: FavoritesDialo
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex-1 min-w-0">
                       <div className="text-xs text-slate-500 dark:text-slate-400 mb-2">
-                        {new Date(fav.chat_messages.created_at).toLocaleString()}
+                        {new Date(fav.message.created_at).toLocaleString()}
                       </div>
                       <div className="text-sm text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words">
-                        {fav.chat_messages.content}
+                        {fav.message.content}
                       </div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
@@ -129,7 +129,7 @@ export function FavoritesDialog({ children, open, onOpenChange }: FavoritesDialo
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        onClick={() => handleCopy(fav.chat_messages.content, fav.id)}
+                        onClick={() => handleCopy(fav.message.content, fav.id)}
                       >
                         {copiedId === fav.id ? (
                           <Check className="h-4 w-4 text-green-500" />

@@ -3,7 +3,9 @@
  * Includes timeout handling, retry logic, and connection recovery
 */
 
-import { NextRequest, NextResponse } from "next/server"
+import { NextResponse } from "next/server"
+import type { User } from "@supabase/supabase-js"
+import { createServiceRoleClient, getServerUser } from "@/lib/supabase/server"
 
 // Default timeout for database operations (10 seconds)
 export const DEFAULT_TIMEOUT = 10000
@@ -15,30 +17,29 @@ export const MAX_RETRIES = 2
 export const RETRY_DELAY = 1000
 
 /**
- * Get authenticated user with fallback to userId cookie/header
+ * Get the signed-in user from the Supabase session cookie
  * This is the primary method for all API routes to get the current user
  */
-export async function getAuthenticatedUser(
-  request: NextRequest,
-  account: any,
-  serviceClient: any,
-  userId?: string
-) {
-  try {
-    // First try to get user from session
-    return await account.get()
-  } catch (error: any) {
-    // Try to get user ID from header or function parameter as fallback
-    const userIdValue = userId || request.headers.get('x-user-id')
-    if (userIdValue) {
-      try {
-        return await serviceClient.users.get(userIdValue)
-      } catch {
-        return null
-      }
-    }
-    return null
+export async function getAuthenticatedUser(): Promise<User | null> {
+  return getServerUser()
+}
+
+/**
+ * Whether the email is listed in reserved_emails (creator/admin accounts)
+ */
+export async function isReservedEmail(email: string | null | undefined): Promise<boolean> {
+  if (!email) return false
+  const supabase = createServiceRoleClient()
+  const { data, error } = await supabase
+    .from("reserved_emails")
+    .select("email")
+    .ilike("email", email.replace(/[\\%_]/g, "\\$&"))
+    .limit(1)
+  if (error) {
+    console.error("Error checking reserved emails:", error.message)
+    return false
   }
+  return (data?.length ?? 0) > 0
 }
 
 /**

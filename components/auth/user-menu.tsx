@@ -55,9 +55,6 @@ export function UserMenu({ isPixel = false, accentRingClass }: UserMenuProps) {
       try {
         const response = await fetch("/api/users", {
           credentials: 'include',
-          headers: {
-            'x-user-id': user.$id,
-          },
         })
         if (response.ok) {
           const data = await response.json()
