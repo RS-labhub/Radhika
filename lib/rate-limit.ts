@@ -1,5 +1,4 @@
-import { createServiceClient, ID, Query } from "./appwrite/server"
-import { APPWRITE_CONFIG } from "./appwrite/config"
+import { createServiceRoleClient } from "./supabase/server"
 
 interface RateLimitConfig {
   maxRequests: number
@@ -54,39 +53,44 @@ async function checkAuthenticatedRateLimit(
   resetAt: Date
   limit: number
 }> {
-  const { databases } = createServiceClient()
+  const supabase = createServiceRoleClient()
   const now = new Date()
   const windowStart = new Date(now.getTime() - config.windowMs)
 
   // Use a composite identifier (userId:action) so we can track per-action limits
   const compositeIdentifier = `${userId}:${action}`
 
+  const failOpen = () => ({
+    allowed: true,
+    remaining: config.maxRequests,
+    resetAt: new Date(now.getTime() + config.windowMs),
+    limit: config.maxRequests,
+  })
+
   try {
-    // Get rate limit record
-    const response = await databases.listDocuments(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.rateLimits,
-      [
-        Query.equal("identifier", compositeIdentifier),
-        Query.limit(1),
-      ]
-    )
+    const { data: existing, error: fetchError } = await supabase
+      .from("rate_limits")
+      .select("id, request_count, window_start")
+      .eq("identifier", compositeIdentifier)
+      .maybeSingle()
 
-    const existing = response.documents[0]
+    if (fetchError) {
+      console.error("Error fetching rate limit:", fetchError)
+      return failOpen()
+    }
 
-    if (!existing) {
-      // Create new rate limit record
+    if (!existing || new Date(existing.window_start) < windowStart) {
       const resetAt = new Date(now.getTime() + config.windowMs)
-      await databases.createDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.rateLimits,
-        ID.unique(),
-        {
-          identifier: compositeIdentifier,
-          request_count: 1,
-          window_start: now.toISOString(),
-        }
-      )
+      const { error } = await supabase
+        .from("rate_limits")
+        .upsert(
+          { identifier: compositeIdentifier, request_count: 1, window_start: now.toISOString() },
+          { onConflict: "identifier" }
+        )
+      if (error) {
+        console.error("Error saving rate limit:", error)
+        return failOpen()
+      }
 
       return {
         allowed: true,
@@ -96,34 +100,10 @@ async function checkAuthenticatedRateLimit(
       }
     }
 
-    // Check if window has expired
-    const existingWindowStart = new Date(existing.window_start)
-    if (existingWindowStart < windowStart) {
-      // Reset the window
-      const resetAt = new Date(now.getTime() + config.windowMs)
-      await databases.updateDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.rateLimits,
-        existing.$id,
-        {
-          request_count: 1,
-          window_start: now.toISOString(),
-        }
-      )
-
-      return {
-        allowed: true,
-        remaining: config.maxRequests - 1,
-        resetAt,
-        limit: config.maxRequests,
-      }
-    }
-
-    // Compute reset time based on stored window_start + windowMs
+    const count = existing.request_count ?? 0
     const resetAtFromRow = new Date(new Date(existing.window_start).getTime() + config.windowMs)
 
-    // Check if limit exceeded
-    if ((existing.request_count ?? 0) >= config.maxRequests) {
+    if (count >= config.maxRequests) {
       return {
         allowed: false,
         remaining: 0,
@@ -132,29 +112,24 @@ async function checkAuthenticatedRateLimit(
       }
     }
 
-    // Increment count
-    await databases.updateDocument(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.rateLimits,
-      existing.$id,
-      { request_count: (existing.request_count ?? 0) + 1 }
-    )
+    const { error: updateError } = await supabase
+      .from("rate_limits")
+      .update({ request_count: count + 1 })
+      .eq("id", existing.id)
+    if (updateError) {
+      console.error("Error updating rate limit:", updateError)
+      return failOpen()
+    }
 
     return {
       allowed: true,
-      remaining: config.maxRequests - (existing.request_count ?? 0) - 1,
+      remaining: config.maxRequests - count - 1,
       resetAt: resetAtFromRow,
       limit: config.maxRequests,
     }
   } catch (error) {
     console.error("Error checking rate limit:", error)
-    // Allow request if we can't check rate limit
-    return {
-      allowed: true,
-      remaining: config.maxRequests,
-      resetAt: new Date(now.getTime() + config.windowMs),
-      limit: config.maxRequests,
-    }
+    return failOpen()
   }
 }
 

@@ -3,10 +3,10 @@
  * 
  * This service implements a local-first approach where:
  * 1. ALL chats and messages are stored in localStorage FIRST
- * 2. Sync to Appwrite happens in the background (non-blocking)
+ * 2. Sync to Supabase happens in the background (non-blocking)
  * 3. Chat history is always available from localStorage
  * 4. No loading states that block the UI
- * 5. Graceful merge when Appwrite data becomes available
+ * 5. Graceful merge when remote data becomes available
  */
 
 import type { Chat, ChatMessage, Mode } from '@/types/chat'
@@ -28,7 +28,7 @@ export interface LocalChat {
   
   // Local-first specific fields
   localId: string // Always present, used for localStorage key
-  remoteId?: string // Appwrite ID once synced
+  remoteId?: string // Remote ID once synced
   syncStatus: 'pending' | 'synced' | 'failed'
   syncError?: string
   lastSyncAt?: string
@@ -37,9 +37,9 @@ export interface LocalChat {
 export interface LocalMessage {
   id: string
   localId: string // Always present
-  remoteId?: string // Appwrite ID once synced
+  remoteId?: string // Remote ID once synced
   chatId: string // References LocalChat.localId
-  remoteChatId?: string // Appwrite chat ID
+  remoteChatId?: string // Remote chat ID
   role: 'user' | 'assistant' | 'system'
   content: string
   metadata?: Record<string, any>
@@ -416,7 +416,7 @@ class LocalChatStorageService {
    */
   private async deleteRemoteChat(remoteId: string): Promise<void> {
     try {
-      const { chatService } = await import('@/lib/appwrite/chat-service')
+      const { chatService } = await import('@/lib/supabase/chat-service')
       await chatService.deleteChat(remoteId)
       console.log(`☁️ Deleted remote chat: ${remoteId}`)
     } catch (err: any) {
@@ -470,7 +470,7 @@ class LocalChatStorageService {
    */
   private async deleteAllRemoteChats(): Promise<void> {
     try {
-      const { chatService } = await import('@/lib/appwrite/chat-service')
+      const { chatService } = await import('@/lib/supabase/chat-service')
       await chatService.deleteAllChats()
       console.log('☁️ Deleted all remote chats')
     } catch (err: any) {
@@ -620,7 +620,7 @@ class LocalChatStorageService {
 
     try {
       // Import chatService dynamically to avoid circular deps
-      const { chatService } = await import('@/lib/appwrite/chat-service')
+      const { chatService } = await import('@/lib/supabase/chat-service')
 
       // Sync chats first (messages depend on chats)
       const chatItems = Array.from(this.syncQueue.values()).filter(i => i.type === 'chat')
@@ -819,8 +819,8 @@ class LocalChatStorageService {
   // ============ Merge with Remote Data ============
 
   /**
-   * Merge remote chats from Appwrite with local chats
-   * This is called when Appwrite data becomes available
+   * Merge remote chats with local chats
+   * This is called when remote data becomes available
    */
   mergeRemoteChats(remoteChats: any[]): void {
     console.log(`🔀 Merging ${remoteChats.length} remote chats with local data`)
@@ -917,7 +917,7 @@ class LocalChatStorageService {
   }
 
   /**
-   * Merge remote messages from Appwrite with local messages
+   * Merge remote messages with local messages
    */
   mergeRemoteMessages(chatId: string, remoteMessages: any[]): void {
     console.log(`🔀 Merging ${remoteMessages.length} remote messages for chat ${chatId}`)
@@ -986,7 +986,7 @@ class LocalChatStorageService {
           remoteChatId: remote.chat_id,
           role: remote.role,
           content: remote.content,
-          metadata: remote.metadata,
+          metadata: typeof remote.metadata === 'string' ? JSON.parse(remote.metadata) : remote.metadata,
           createdAt: remote.created_at,
           isFavorite: remote.is_favorite || false,
           syncStatus: 'synced',

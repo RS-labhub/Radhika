@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useAuth } from "@/contexts/auth-context";
+import { useAuth, getUserDisplayName } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,11 +32,10 @@ export function ProfileTab() {
   // Load user profile on mount
   useEffect(() => {
     if (user) {
-      setDisplayName(user.name || user.email?.split("@")[0] || "");
-      // Load avatar from user prefs if available
-      const prefs = user.prefs as Record<string, unknown> | undefined;
-      if (prefs?.avatar_url && typeof prefs.avatar_url === 'string') {
-        setAvatarUrl(prefs.avatar_url);
+      setDisplayName(getUserDisplayName(user) || user.email?.split("@")[0] || "");
+      const avatar = user.user_metadata?.avatar_url;
+      if (avatar && typeof avatar === 'string') {
+        setAvatarUrl(avatar);
       }
     }
   }, [user]);

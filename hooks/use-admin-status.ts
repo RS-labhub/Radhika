@@ -35,7 +35,7 @@ export function useAdminStatus() {
         if (cached) {
           const data: AdminStatusCache = JSON.parse(cached)
           // Check if cache is valid (same user and not expired)
-          if (data.userId === user.$id && Date.now() - data.timestamp < CACHE_DURATION) {
+          if (data.userId === user.id && Date.now() - data.timestamp < CACHE_DURATION) {
             setIsAdmin(data.isAdmin)
             return data.isAdmin
           }
@@ -49,10 +49,7 @@ export function useAdminStatus() {
     setIsChecking(true)
     try {
       const response = await fetch("/api/check-admin", {
-        credentials: 'include',
-        headers: {
-          'x-user-id': user.$id
-        }
+        credentials: 'include'
       })
       
       if (response.ok) {
@@ -64,7 +61,7 @@ export function useAdminStatus() {
           try {
             const cacheData: AdminStatusCache = {
               isAdmin: adminStatus,
-              userId: user.$id,
+              userId: user.id,
               timestamp: Date.now()
             }
             sessionStorage.setItem(STORAGE_KEYS.ADMIN_STATUS, JSON.stringify(cacheData))

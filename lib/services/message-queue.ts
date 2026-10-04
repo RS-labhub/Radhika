@@ -4,11 +4,11 @@
  * This service provides a resilient message storage system that:
  * 1. Stores messages in memory for immediate access
  * 2. Persists failed messages to localStorage for browser refresh recovery
- * 3. Automatically retries saving failed messages to Appwrite
+ * 3. Automatically retries saving failed messages to Supabase
  * 4. Syncs queued messages when connection is restored
  */
 
-import { chatService } from "@/lib/appwrite/chat-service"
+import { chatService } from "@/lib/supabase/chat-service"
 
 export interface QueuedMessage {
   id: string
@@ -32,7 +32,7 @@ export interface QueuedChat {
   retryCount: number
   lastRetryAt?: number
   error?: string
-  createdChatId?: string // The ID returned from Appwrite once created
+  createdChatId?: string // The ID returned from Supabase once created
 }
 
 const STORAGE_KEY = "radhika-message-queue"

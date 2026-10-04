@@ -1,256 +1,167 @@
 "use client"
 
 import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from "react"
-import { getAccount, resetAppwriteClients } from "@/lib/appwrite/client"
-import type { Models } from "appwrite"
+import type { User } from "@supabase/supabase-js"
+import { getSupabaseClient } from "@/lib/supabase/client"
 import type { UserRole } from "@/types/database"
 
 interface AuthContextType {
-  user: Models.User<Models.Preferences> | null
+  user: User | null
   profile: null // Backwards compatibility - profiles handled separately
   loading: boolean
   isLoading: boolean // Alias for loading
   isAuthenticated: boolean
   role: UserRole
   signIn: (email: string, password: string, remember?: boolean) => Promise<{ error?: Error } | void>
-  signUp: (email: string, password: string, name?: string) => Promise<{ error?: Error }>
+  signUp: (email: string, password: string, name?: string) => Promise<{ error?: Error; needsEmailConfirmation?: boolean }>
   signOut: () => Promise<void>
   resetPassword: (email: string) => Promise<{ error?: Error }>
   updatePassword: (password: string) => Promise<{ error?: Error }>
-  sendPasswordRecovery: (email: string) => Promise<void>
-  confirmPasswordRecovery: (userId: string, secret: string, password: string) => Promise<void>
   refreshUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+export function getUserDisplayName(user: User | null | undefined): string {
+  const meta = user?.user_metadata
+  return meta?.name || meta?.display_name || meta?.full_name || ""
+}
+
+async function fetchRole(userId: string): Promise<UserRole> {
+  try {
+    const { data } = await getSupabaseClient().from("users").select("role").eq("id", userId).maybeSingle()
+    const role = data?.role as UserRole | undefined
+    return role === "admin" || role === "premium" ? role : "authenticated"
+  } catch {
+    return "authenticated"
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<Models.User<Models.Preferences> | null>(null)
+  const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
-  const [role, setRole] = useState<UserRole>('guest')
+  const [role, setRole] = useState<UserRole>("guest")
+
+  const applyUser = useCallback(async (nextUser: User | null) => {
+    setUser(nextUser)
+    setRole(nextUser ? await fetchRole(nextUser.id) : "guest")
+  }, [])
 
   const refreshUser = useCallback(async () => {
     try {
-      const account = getAccount()
-      const currentUser = await account.get()
-      setUser(currentUser)
-      
-      // Determine role based on user labels or default to authenticated
-      // Appwrite stores custom user data in labels or prefs
-      const labels = currentUser.labels || []
-      if (labels.includes('admin')) {
-        setRole('admin')
-      } else if (labels.includes('premium')) {
-        setRole('premium')
-      } else {
-        setRole('authenticated')
-      }
-      
-      // Store session in cookie for server-side access
-      // Note: In Appwrite v21+, we need to store the session secret, not just the ID
-      try {
-        const session = await account.getSession('current')
-        if (session) {
-          // Determine if we're on localhost (don't use secure for local dev)
-          const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-          const secureFlag = isLocalhost ? '' : '; secure'
-          
-          // The session secret is needed for server-side validation
-          // Store both the session ID and use it with x-user-id header as fallback
-          document.cookie = `appwrite-session=${session.secret || session.$id}; path=/; max-age=2592000${secureFlag}; samesite=lax`
-          document.cookie = `appwrite-user-id=${currentUser.$id}; path=/; max-age=2592000${secureFlag}; samesite=lax`
-        }
-      } catch {
-        // Session might not exist yet
-      }
-    } catch (error: any) {
-      // If it's a "guest" error or unauthorized, just clear user
-      if (error.code === 401 || error.type === 'general_unauthorized_scope') {
-        setUser(null)
-        setRole('guest')
-      } else {
-        console.error("Failed to refresh user:", error)
-        setUser(null)
-        setRole('guest')
-      }
+      const { data, error } = await getSupabaseClient().auth.getUser()
+      await applyUser(error ? null : data.user)
+    } catch (error) {
+      console.error("Failed to refresh user:", error)
+      await applyUser(null)
+    }
+  }, [applyUser])
+
+  useEffect(() => {
+    let active = true
+    const supabase = getSupabaseClient()
+
+    refreshUser().finally(() => {
+      if (active) setLoading(false)
+    })
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "INITIAL_SESSION") return
+      // Defer to avoid awaiting Supabase calls inside the auth callback
+      setTimeout(() => {
+        if (active) void applyUser(session?.user ?? null)
+      }, 0)
+    })
+
+    const handleSignOutEvent = () => {
+      setUser(null)
+      setRole("guest")
+    }
+    window.addEventListener("radhika:signOut", handleSignOutEvent)
+
+    return () => {
+      active = false
+      subscription.subscription.unsubscribe()
+      window.removeEventListener("radhika:signOut", handleSignOutEvent)
+    }
+  }, [refreshUser, applyUser])
+
+  const initUser = useCallback(async (currentUser: User) => {
+    try {
+      await fetch("/api/users/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: getUserDisplayName(currentUser) || undefined }),
+      })
+    } catch (err) {
+      console.warn("Failed to initialize user data:", err)
     }
   }, [])
 
-  useEffect(() => {
-    const initAuth = async () => {
-      setLoading(true)
-      try {
-        await refreshUser()
-      } catch {
-        // Silent fail for initial check
-      } finally {
-        setLoading(false)
-      }
-    }
+  const signIn = useCallback(async (email: string, password: string): Promise<{ error?: Error } | void> => {
+    const { data, error } = await getSupabaseClient().auth.signInWithPassword({ email, password })
+    if (error) return { error }
 
-    initAuth()
-    
-    // Listen for sign out events (e.g., from account deletion)
-    const handleSignOutEvent = () => {
-      console.log("[AuthContext] Sign out event received")
-      setUser(null)
-      setRole('guest')
-    }
-    
-    if (typeof window !== 'undefined') {
-      window.addEventListener('radhika:signOut', handleSignOutEvent)
-    }
-    
-    return () => {
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('radhika:signOut', handleSignOutEvent)
-      }
-    }
-  }, [refreshUser])
+    await applyUser(data.user)
+    await initUser(data.user)
+    return undefined
+  }, [applyUser, initUser])
 
-  const signIn = useCallback(async (email: string, password: string, remember?: boolean): Promise<{ error?: Error } | void> => {
-    try {
-      const account = getAccount()
-      
-      // Create email session
-      const session = await account.createEmailPasswordSession(email, password)
-      
-      // Session expiry: 30 days if remember, 1 day otherwise
-      const maxAge = remember ? 2592000 : 86400
-      
-      // Determine if we're on localhost (don't use secure for local dev)
-      const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-      const secureFlag = isLocalhost ? '' : '; secure'
-      
-      // Store session in cookie for server-side access
-      document.cookie = `appwrite-session=${session.secret || session.$id}; path=/; max-age=${maxAge}${secureFlag}; samesite=lax`
-      
-      // Also store user ID for fallback auth
-      try {
-        const user = await account.get()
-        document.cookie = `appwrite-user-id=${user.$id}; path=/; max-age=${maxAge}${secureFlag}; samesite=lax`
-      } catch {
-        // User might not be available yet
-      }
-      
-      // Refresh user info
-      await refreshUser()
-      
-      // Initialize user in database with user data
-      try {
-        const currentUser = await account.get()
-        await fetch('/api/users/init', { 
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId: currentUser.$id,
-            email: currentUser.email,
-            displayName: currentUser.name
-          })
-        })
-      } catch (err) {
-        console.warn('Failed to initialize user data:', err)
-      }
-      
-      return undefined
-    } catch (error) {
-      return { error: error as Error }
-    }
-  }, [refreshUser])
+  const signUp = useCallback(async (email: string, password: string, name?: string) => {
+    const { data, error } = await getSupabaseClient().auth.signUp({
+      email,
+      password,
+      options: {
+        data: name ? { name, display_name: name } : undefined,
+        emailRedirectTo: `${window.location.origin}/auth/confirm`,
+      },
+    })
+    if (error) return { error }
 
-  const signUp = useCallback(async (email: string, password: string, name?: string): Promise<{ error?: Error }> => {
-    try {
-      const account = getAccount()
-      
-      // Create the account
-      await account.create('unique()', email, password, name)
-      
-      // Send email verification - DISABLED FOR NOW
-      // Users can directly access dashboard after signup
-      // try {
-      //   const verifyUrl = `${window.location.origin}/auth/confirm`
-      //   await account.createVerification(verifyUrl)
-      // } catch (verifyError) {
-      //   console.warn('Failed to send verification email:', verifyError)
-      //   // Don't fail signup if verification email fails
-      // }
-      
-      // Sign in immediately after signup
-      await signIn(email, password)
-      
-      return {}
-    } catch (error) {
-      return { error: error as Error }
-    }
-  }, [signIn])
+    if (!data.session) return { needsEmailConfirmation: true }
+
+    await applyUser(data.user)
+    if (data.user) await initUser(data.user)
+    return {}
+  }, [applyUser, initUser])
 
   const signOut = useCallback(async () => {
     try {
-      const account = getAccount()
-      await account.deleteSession('current')
+      await getSupabaseClient().auth.signOut()
     } catch (error) {
-      console.warn('Error deleting session:', error)
+      console.warn("Error signing out:", error)
     }
-    
-    // Clear the session cookies
-    document.cookie = 'appwrite-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
-    document.cookie = 'appwrite-user-id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
-    
-    // Clear all local storage for chats and favorites
+
     try {
-      const { localChatStorage } = await import('@/lib/services/local-chat-storage')
-      const { localFavoritesStorage } = await import('@/lib/services/local-favorites-storage')
+      const { localChatStorage } = await import("@/lib/services/local-chat-storage")
+      const { localFavoritesStorage } = await import("@/lib/services/local-favorites-storage")
       localChatStorage.clearAll()
       localFavoritesStorage.clearAll()
-      console.log('🗑️ Cleared local chat and favorites storage on sign out')
     } catch (err) {
-      console.warn('Failed to clear local storage:', err)
+      console.warn("Failed to clear local storage:", err)
     }
-    
-    // Reset Appwrite clients
-    resetAppwriteClients()
-    
+
     setUser(null)
-    setRole('guest')
+    setRole("guest")
   }, [])
 
   const resetPassword = useCallback(async (email: string): Promise<{ error?: Error }> => {
-    try {
-      const account = getAccount()
-      const resetUrl = `${window.location.origin}/auth/reset-password`
-      await account.createRecovery(email, resetUrl)
-      return {}
-    } catch (error) {
-      return { error: error as Error }
-    }
+    const { error } = await getSupabaseClient().auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/auth/reset-password`,
+    })
+    return error ? { error } : {}
   }, [])
 
   const updatePassword = useCallback(async (password: string): Promise<{ error?: Error }> => {
-    try {
-      const account = getAccount()
-      await account.updatePassword(password)
-      return {}
-    } catch (error) {
-      return { error: error as Error }
-    }
-  }, [])
-
-  const sendPasswordRecovery = useCallback(async (email: string) => {
-    const account = getAccount()
-    const resetUrl = `${window.location.origin}/auth/reset-password`
-    await account.createRecovery(email, resetUrl)
-  }, [])
-
-  const confirmPasswordRecovery = useCallback(async (userId: string, secret: string, password: string) => {
-    const account = getAccount()
-    await account.updateRecovery(userId, secret, password)
+    const { error } = await getSupabaseClient().auth.updateUser({ password })
+    return error ? { error } : {}
   }, [])
 
   const value: AuthContextType = {
     user,
-    profile: null, // Profiles handled separately via /api/profiles
+    profile: null,
     loading,
-    isLoading: loading, // Alias for backwards compatibility
+    isLoading: loading,
     isAuthenticated: !!user,
     role,
     signIn,
@@ -258,8 +169,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signOut,
     resetPassword,
     updatePassword,
-    sendPasswordRecovery,
-    confirmPasswordRecovery,
     refreshUser,
   }
 

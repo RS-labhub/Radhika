@@ -1,173 +1,104 @@
 import { NextRequest } from "next/server"
-import { createServerAppwriteClient, createServiceClient, ID, Permission, Role } from "@/lib/appwrite/server"
-import { APPWRITE_CONFIG } from "@/lib/appwrite/config"
-import { errorResponse, successResponse } from "@/lib/api-utils"
+import { AVATARS_BUCKET, createServiceRoleClient } from "@/lib/supabase/server"
+import { errorResponse, getAuthenticatedUser, successResponse } from "@/lib/api-utils"
 
-// Helper to get user from session or header
-async function getUser(request: NextRequest, account: any, serviceClient: any) {
-  try {
-    return await account.get()
-  } catch (error: any) {
-    // Try to get user ID from header as fallback
-    const userIdHeader = request.headers.get('x-user-id')
-    if (userIdHeader) {
-      try {
-        return await serviceClient.users.get(userIdHeader)
-      } catch {
-        return null
-      }
-    }
-    return null
-  }
+const MAX_AVATAR_SIZE = 2 * 1024 * 1024
+
+function getStoragePath(avatarUrl: string | null | undefined): string | null {
+  if (!avatarUrl) return null
+  const marker = `/object/public/${AVATARS_BUCKET}/`
+  const index = avatarUrl.indexOf(marker)
+  if (index === -1) return null
+  const path = decodeURIComponent(avatarUrl.slice(index + marker.length).split("?")[0])
+  return path.startsWith("/") ? null : path
+}
+
+async function removePreviousAvatar(supabase: ReturnType<typeof createServiceRoleClient>, userId: string, avatarUrl: string | null | undefined) {
+  const path = getStoragePath(avatarUrl)
+  if (!path || !path.startsWith(`${userId}/`)) return
+  const { error } = await supabase.storage.from(AVATARS_BUCKET).remove([path])
+  if (error) console.warn("Could not delete previous avatar:", error.message)
 }
 
 // POST /api/users/avatar - Upload avatar
 export async function POST(request: NextRequest) {
   try {
-    const { account } = await createServerAppwriteClient()
-    const serviceClient = createServiceClient()
-
-    const user = await getUser(request, account, serviceClient)
+    const user = await getAuthenticatedUser()
     if (!user) {
       return errorResponse("Unauthorized", 401)
     }
 
     const formData = await request.formData()
-    // Accept both 'file' and 'avatar' field names
-    const file = (formData.get('file') || formData.get('avatar')) as File | null
+    const file = (formData.get("file") || formData.get("avatar")) as File | null
 
     if (!file) {
       return errorResponse("No file provided", 400)
     }
 
-    // Validate file type
-    if (!file.type.startsWith('image/')) {
+    if (!file.type.startsWith("image/")) {
       return errorResponse("Invalid file type. Please upload an image.", 400)
     }
 
-    // Validate file size (max 2MB)
-    if (file.size > 2 * 1024 * 1024) {
+    if (file.size > MAX_AVATAR_SIZE) {
       return errorResponse("File too large. Max size is 2MB.", 400)
     }
 
-    // Delete old avatar if exists
-    try {
-      const oldPrefs = user.prefs as Record<string, unknown> | undefined
-      if (oldPrefs?.avatar_file_id && typeof oldPrefs.avatar_file_id === 'string') {
-        await serviceClient.storage.deleteFile(
-          APPWRITE_CONFIG.buckets.avatars,
-          oldPrefs.avatar_file_id
-        )
-      }
-    } catch (e) {
-      // Ignore - old file might not exist
-      console.log("Could not delete old avatar:", e)
+    const supabase = createServiceRoleClient()
+
+    const { data: existing } = await supabase.from("users").select("avatar_url").eq("id", user.id).maybeSingle()
+
+    const rawExt = (file.name.split(".").pop() || file.type.split("/")[1] || "png").toLowerCase()
+    const ext = rawExt.replace(/[^a-z0-9]/g, "").slice(0, 8) || "png"
+    const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`
+
+    const { error: uploadError } = await supabase.storage
+      .from(AVATARS_BUCKET)
+      .upload(path, Buffer.from(await file.arrayBuffer()), { contentType: file.type, upsert: false })
+    if (uploadError) {
+      return errorResponse(uploadError.message || "Failed to upload avatar", 500, uploadError)
     }
 
-    // Convert File to Buffer for Appwrite
-    const arrayBuffer = await file.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
-    
-    // Create a File object that Appwrite expects
-    const { InputFile } = await import('node-appwrite/file')
-    const inputFile = InputFile.fromBuffer(buffer, file.name)
+    const avatarUrl = supabase.storage.from(AVATARS_BUCKET).getPublicUrl(path).data.publicUrl
 
-    // Upload new avatar with permissions that allow public read
-    const fileId = ID.unique()
-    const uploadedFile = await serviceClient.storage.createFile(
-      APPWRITE_CONFIG.buckets.avatars,
-      fileId,
-      inputFile,
-      [
-        Permission.read(Role.any()), // Allow public read
-        Permission.write(Role.user(user.$id)), // Only owner can write
-        Permission.delete(Role.user(user.$id)), // Only owner can delete
-      ]
-    )
-
-    // Build the URL for the avatar
-    const avatarUrl = `${APPWRITE_CONFIG.endpoint}/storage/buckets/${APPWRITE_CONFIG.buckets.avatars}/files/${uploadedFile.$id}/view?project=${APPWRITE_CONFIG.projectId}`
-
-    // Update user preferences with the new avatar URL and file ID
-    await serviceClient.users.updatePrefs(user.$id, {
-      ...((user.prefs as object) || {}),
-      avatar_url: avatarUrl,
-      avatar_file_id: uploadedFile.$id,
-    })
-
-    // Also update the users collection in the database
-    try {
-      await serviceClient.databases.updateDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.users,
-        user.$id,
-        { avatar_url: avatarUrl }
-      )
-      console.log("Updated users collection with avatar_url:", avatarUrl)
-    } catch (e: any) {
-      // Document might not exist yet, try creating it
-      console.log("Could not update users collection, trying to create:", e?.message)
-      try {
-        await serviceClient.databases.createDocument(
-          APPWRITE_CONFIG.databaseId,
-          APPWRITE_CONFIG.collections.users,
-          user.$id,
-          { 
-            avatar_url: avatarUrl,
-            display_name: user.name || user.email?.split('@')[0] || null,
-            email_verified: false,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          }
-        )
-        console.log("Created users collection document with avatar_url:", avatarUrl)
-      } catch (createError: any) {
-        console.error("Failed to create users document:", createError?.message)
-      }
+    const { error: updateError } = await supabase
+      .from("users")
+      .upsert({ id: user.id, email: user.email, avatar_url: avatarUrl }, { onConflict: "id" })
+    if (updateError) {
+      await supabase.storage.from(AVATARS_BUCKET).remove([path])
+      return errorResponse("Failed to save avatar", 500, updateError)
     }
+
+    await removePreviousAvatar(supabase, user.id, existing?.avatar_url)
 
     return successResponse({
       url: avatarUrl,
-      avatarUrl: avatarUrl,
-      fileId: uploadedFile.$id,
+      avatarUrl,
+      fileId: path,
     })
   } catch (error: any) {
     console.error("Error uploading avatar:", error)
-    return errorResponse(
-      error.message || "Failed to upload avatar",
-      error.code === 404 ? 404 : 500,
-      error
-    )
+    return errorResponse(error.message || "Failed to upload avatar", 500, error)
   }
 }
 
 // DELETE /api/users/avatar - Delete avatar
-export async function DELETE(request: NextRequest) {
+export async function DELETE() {
   try {
-    const { account } = await createServerAppwriteClient()
-    const serviceClient = createServiceClient()
-
-    const user = await getUser(request, account, serviceClient)
+    const user = await getAuthenticatedUser()
     if (!user) {
       return errorResponse("Unauthorized", 401)
     }
 
-    const prefs = user.prefs as Record<string, unknown> | undefined
-    if (prefs?.avatar_file_id && typeof prefs.avatar_file_id === 'string') {
-      // Delete the file from storage
-      try {
-        await serviceClient.storage.deleteFile(
-          APPWRITE_CONFIG.buckets.avatars,
-          prefs.avatar_file_id
-        )
-      } catch (e) {
-        console.log("Could not delete avatar file:", e)
-      }
+    const supabase = createServiceRoleClient()
 
-      // Clear avatar from preferences
-      const { avatar_url, avatar_file_id, ...restPrefs } = prefs
-      await serviceClient.users.updatePrefs(user.$id, restPrefs)
+    const { data: existing } = await supabase.from("users").select("avatar_url").eq("id", user.id).maybeSingle()
+
+    const { error } = await supabase.from("users").update({ avatar_url: null }).eq("id", user.id)
+    if (error) {
+      return errorResponse("Failed to delete avatar", 500, error)
     }
+
+    await removePreviousAvatar(supabase, user.id, existing?.avatar_url)
 
     return successResponse({ success: true })
   } catch (error: any) {

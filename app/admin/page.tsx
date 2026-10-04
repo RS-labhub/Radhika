@@ -146,11 +146,7 @@ export default function AdminPage() {
         params.set("search", searchQuery)
       }
 
-      const response = await fetch(`/api/admin?${params.toString()}`, {
-        headers: {
-          'x-user-id': user.$id
-        }
-      })
+      const response = await fetch(`/api/admin?${params.toString()}`)
       if (response.ok) {
         const data = await response.json()
         setUsers(data.users || [])
@@ -181,9 +177,7 @@ export default function AdminPage() {
     if (!user) return
     setIsLoadingUserDetails(true)
     try {
-      const response = await fetch(`/api/admin/users/${userId}`, {
-        headers: { 'x-user-id': user.$id }
-      })
+      const response = await fetch(`/api/admin/users/${userId}`)
       if (response.ok) {
         const data = await response.json()
         setSelectedUserChats(data.chats || [])
@@ -206,9 +200,7 @@ export default function AdminPage() {
     if (!user) return
     setIsLoadingChat(true)
     try {
-      const response = await fetch(`/api/admin/chats/${chatId}`, {
-        headers: { 'x-user-id': user.$id }
-      })
+      const response = await fetch(`/api/admin/chats/${chatId}`)
       if (response.ok) {
         const data = await response.json()
         setChatMessages(data.messages || [])
@@ -234,7 +226,6 @@ export default function AdminPage() {
     try {
       const response = await fetch(`/api/admin/users/${userToDelete.id}`, {
         method: "DELETE",
-        headers: { 'x-user-id': user.$id }
       })
       if (response.ok) {
         toast({
@@ -267,7 +258,6 @@ export default function AdminPage() {
     try {
       const response = await fetch(`/api/admin/chats/${chatToDelete.id}`, {
         method: "DELETE",
-        headers: { 'x-user-id': user.$id }
       })
       if (response.ok) {
         toast({
@@ -756,10 +746,7 @@ export default function AdminPage() {
                   try {
                     const response = await fetch(`/api/admin/users/${selectedUser.id}`, {
                       method: 'PATCH',
-                      headers: { 
-                        'Content-Type': 'application/json',
-                        'x-user-id': user.$id 
-                      },
+                      headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify({ deleteAvatar: true })
                     })
                     if (response.ok) {

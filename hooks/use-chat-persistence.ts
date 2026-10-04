@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { localChatStorage, LocalChat, LocalMessage as StorageMessage } from "@/lib/services/local-chat-storage"
 import { localFavoritesStorage } from "@/lib/services/local-favorites-storage"
-import { chatService } from "@/lib/appwrite/chat-service"
+import { chatService } from "@/lib/supabase/chat-service"
 import type { Mode } from "@/types/chat"
 import { useAuth } from "@/contexts/auth-context"
 
@@ -52,11 +52,11 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
 
   // Set user ID for both local storages
   useEffect(() => {
-    if (user?.$id) {
-      localChatStorage.setUserId(user.$id)
-      localFavoritesStorage.setUserId(user.$id)
+    if (user?.id) {
+      localChatStorage.setUserId(user.id)
+      localFavoritesStorage.setUserId(user.id)
     }
-  }, [user?.$id])
+  }, [user?.id])
 
   useEffect(() => {
     const unsubscribe = localChatStorage.subscribe((event, data) => {
@@ -99,7 +99,7 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
     
     // Fetch remote chats in background with timeout protection
     fetchAndMergeRemoteChats()
-  }, [isAuthenticated, user?.$id, mode, profileId])
+  }, [isAuthenticated, user?.id, mode, profileId])
 
   const fetchAndMergeRemoteChats = async () => {
     if (!isAuthenticated || !user || !isMountedRef.current) return
@@ -181,11 +181,11 @@ export function useChatPersistence(mode: Mode, profileId?: string) {
       mode,
       title || mode.charAt(0).toUpperCase() + mode.slice(1) + " Chat",
       profileId,
-      user.$id
+      user.id
     )
     setCurrentChat(chat)
     return chat
-  }, [mode, profileId, user?.$id])
+  }, [mode, profileId, user?.id])
 
   const getOrCreateChat = useCallback((title?: string): LocalChat | undefined => {
     if (currentChat) return currentChat

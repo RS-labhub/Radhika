@@ -1,137 +1,75 @@
 import { NextRequest } from "next/server"
-import { createServerAppwriteClient, createServiceClient, Query } from "@/lib/appwrite/server"
-import { APPWRITE_CONFIG } from "@/lib/appwrite/config"
-import { errorResponse, successResponse } from "@/lib/api-utils"
-
-// Helper to get user from session or header (same as /api/users)
-async function getUser(request: NextRequest, account: any, serviceClient: any) {
-  try {
-    return await account.get()
-  } catch (error: any) {
-    // Try to get user ID from header as fallback
-    const userIdHeader = request.headers.get('x-user-id')
-    if (userIdHeader) {
-      try {
-        return await serviceClient.users.get(userIdHeader)
-      } catch {
-        return null
-      }
-    }
-    return null
-  }
-}
-
-// Helper to verify admin access (user must be in reserved_emails)
-async function verifyAdminAccess(request: NextRequest): Promise<{ user: any; isAdmin: boolean }> {
-  const { account } = await createServerAppwriteClient()
-  const serviceClient = createServiceClient()
-
-  const user = await getUser(request, account, serviceClient)
-  
-  if (!user) {
-    console.log("[Admin] No user found")
-    return { user: null, isAdmin: false }
-  }
-
-  console.log("[Admin] Checking admin access for:", user.email)
-
-  // Check if user email is in reserved_emails collection
-  try {
-    const reservedEmails = await serviceClient.databases.listDocuments(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.reservedEmails,
-      [Query.equal("email", user.email)]
-    )
-    console.log("[Admin] Reserved emails query result:", {
-      collectionId: APPWRITE_CONFIG.collections.reservedEmails,
-      userEmail: user.email,
-      found: reservedEmails.documents.length
-    })
-    return { user, isAdmin: reservedEmails.documents.length > 0 }
-  } catch (error: any) {
-    console.error("[Admin] Error checking reserved emails:", error?.message)
-    return { user, isAdmin: false }
-  }
-}
+import { createServiceRoleClient, getAvatarPublicUrl } from "@/lib/supabase/server"
+import { errorResponse, successResponse, getAuthenticatedUser, isReservedEmail } from "@/lib/api-utils"
 
 // GET /api/admin - Get all users with their chats and stats
 export async function GET(request: NextRequest) {
   try {
-    const { user, isAdmin } = await verifyAdminAccess(request)
-    
+    const user = await getAuthenticatedUser()
+
     if (!user) {
       return errorResponse("Unauthorized", 401)
     }
-    
-    if (!isAdmin) {
+
+    if (!(await isReservedEmail(user.email))) {
       return errorResponse("Forbidden - Admin access required", 403)
     }
 
-    const serviceClient = createServiceClient()
+    const supabase = createServiceRoleClient()
     const searchParams = request.nextUrl.searchParams
-    const page = parseInt(searchParams.get("page") || "1", 10)
-    const limit = Math.min(parseInt(searchParams.get("limit") || "20", 10), 100)
+    const page = Math.max(parseInt(searchParams.get("page") || "1", 10) || 1, 1)
+    const limit = Math.min(parseInt(searchParams.get("limit") || "20", 10) || 20, 100)
     const search = searchParams.get("search") || ""
 
-    // Get all users from Appwrite
-    const usersQuery: string[] = []
+    let usersQuery = supabase
+      .from("users")
+      .select("id, email, display_name, avatar_url, role, created_at, updated_at, last_login_at", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range((page - 1) * limit, page * limit - 1)
+
     if (search) {
-      usersQuery.push(Query.search("email", search))
+      usersQuery = usersQuery.ilike("email", `%${search.replace(/[\\%_]/g, "\\$&")}%`)
     }
-    usersQuery.push(Query.limit(limit))
-    usersQuery.push(Query.offset((page - 1) * limit))
-    
-    const usersResponse = await serviceClient.users.list(usersQuery)
-    
-    // Get stats for each user
+
+    const { data: users, count, error: usersError } = await usersQuery
+    if (usersError) throw usersError
+
+    const total = count ?? 0
+    const ids = (users || []).map((u) => u.id)
+
+    const { data: profiles } = ids.length
+      ? await supabase.from("profiles").select("id, is_creator").in("id", ids)
+      : { data: [] as { id: string; is_creator: boolean | null }[] }
+    const creatorById = new Map((profiles || []).map((p) => [p.id, p.is_creator === true]))
+
     const usersWithStats = await Promise.all(
-      usersResponse.users.map(async (appwriteUser: any) => {
-        // Get user's chats count
+      (users || []).map(async (u) => {
         let chatCount = 0
         let messageCount = 0
         try {
-          const chatsResponse = await serviceClient.databases.listDocuments(
-            APPWRITE_CONFIG.databaseId,
-            APPWRITE_CONFIG.collections.chats,
-            [Query.equal("user_id", appwriteUser.$id), Query.limit(1)]
-          )
-          chatCount = chatsResponse.total
-
-          // Sum up message counts from chats
-          const allChatsResponse = await serviceClient.databases.listDocuments(
-            APPWRITE_CONFIG.databaseId,
-            APPWRITE_CONFIG.collections.chats,
-            [Query.equal("user_id", appwriteUser.$id), Query.limit(1000)]
-          )
-          messageCount = allChatsResponse.documents.reduce((sum: number, chat: any) => sum + (chat.message_count || 0), 0)
-        } catch (e) {
+          const { data: chats, count: chatTotal } = await supabase
+            .from("chats")
+            .select("message_count", { count: "exact" })
+            .eq("user_id", u.id)
+            .limit(1000)
+          chatCount = chatTotal ?? 0
+          messageCount = (chats || []).reduce((sum, chat) => sum + (chat.message_count || 0), 0)
+        } catch {
           // Ignore errors for individual user stats
         }
 
-        // Get user profile
-        let profile = null
-        try {
-          profile = await serviceClient.databases.getDocument(
-            APPWRITE_CONFIG.databaseId,
-            APPWRITE_CONFIG.collections.users,
-            appwriteUser.$id
-          )
-        } catch {
-          // Profile might not exist
-        }
-
         return {
-          id: appwriteUser.$id,
-          email: appwriteUser.email,
-          name: appwriteUser.name,
-          labels: appwriteUser.labels || [],
-          createdAt: appwriteUser.$createdAt,
-          lastActivity: appwriteUser.accessedAt || appwriteUser.$updatedAt,
-          profile: profile ? {
-            display_name: profile.display_name,
-            avatar_url: profile.avatar_url,
-            is_creator: profile.is_creator
-          } : null,
+          id: u.id,
+          email: u.email,
+          name: u.display_name || "",
+          labels: [] as string[],
+          createdAt: u.created_at,
+          lastActivity: u.last_login_at || u.updated_at,
+          profile: {
+            display_name: u.display_name,
+            avatar_url: getAvatarPublicUrl(u.avatar_url),
+            is_creator: creatorById.get(u.id) === true
+          },
           stats: {
             chatCount,
             messageCount
@@ -142,10 +80,10 @@ export async function GET(request: NextRequest) {
 
     return successResponse({
       users: usersWithStats,
-      total: usersResponse.total,
+      total,
       page,
       limit,
-      totalPages: Math.ceil(usersResponse.total / limit)
+      totalPages: Math.ceil(total / limit)
     })
   } catch (error: any) {
     console.error("Error fetching admin data:", error)

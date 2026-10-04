@@ -1,6 +1,6 @@
 import { checkRateLimit, getRateLimitHeaders } from "@/lib/rate-limit"
-import { createServerAppwriteClient, createServiceClient, Query } from "@/lib/appwrite/server"
-import { APPWRITE_CONFIG } from "@/lib/appwrite/config"
+import { createServiceRoleClient } from "@/lib/supabase/server"
+import { getAuthenticatedUser, isReservedEmail } from "@/lib/api-utils"
 import { SYSTEM_PROMPTS, CORE_SYSTEM_PROMPT, CREATOR_BOYFRIEND_PROMPT } from "@/lib/chat/system-prompts"
 import { createPersonalizedPrompt, type UserGender, type UserAge } from "@/lib/chat/personalization"
 import { handleGeminiRequest } from "./providers/gemini"
@@ -44,79 +44,39 @@ export async function POST(req: Request) {
   try {
     console.log("=== Chat API Request Started ===")
 
-    // Check authentication and rate limiting using Appwrite
-    const { account, databases, userId: cookieUserId } = await createServerAppwriteClient()
-    const serviceClient = createServiceClient()
-    
-    let user: { $id: string; email?: string } | null = null
-    try {
-      user = await account.get()
-    } catch {
-      // Not authenticated via session - check if we have user ID from cookie or header
-      const headerUserId = req.headers.get('x-user-id')
-      const fallbackUserId = headerUserId || cookieUserId
-      
-      if (fallbackUserId) {
-        try {
-          // Validate user exists using service client
-          const validatedUser = await serviceClient.users.get(fallbackUserId)
-          user = { $id: validatedUser.$id, email: validatedUser.email }
-        } catch {
-          // Invalid user ID, continue as guest
-        }
-      }
-    }
-    
+    const user = await getAuthenticatedUser()
+    const supabase = createServiceRoleClient()
+
     // Get identifier for rate limiting (user ID or IP)
-    const identifier = user?.$id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous"
+    const identifier = user?.id || req.headers.get("x-forwarded-for") || req.headers.get("x-real-ip") || "anonymous"
     const isAuthenticated = !!user
 
     // Check whether this user is the reserved creator (server-side) - with caching
     let isCreator = false
-    if (user?.$id) {
+    if (user?.id) {
       // Check cache first
-      const cachedCreatorStatus = getCachedCreatorStatus(user.$id)
+      const cachedCreatorStatus = getCachedCreatorStatus(user.id)
       if (cachedCreatorStatus !== null) {
         isCreator = cachedCreatorStatus
         console.log('[chat] Creator status (cached):', isCreator)
       } else {
         try {
           const userEmail = user.email?.toLowerCase()
-          
-          // Check reserved_emails collection using service client (bypasses permissions)
-          try {
-            const reservedEmails = await serviceClient.databases.listDocuments(
-              APPWRITE_CONFIG.databaseId,
-              APPWRITE_CONFIG.collections.reservedEmails,
-              [Query.equal('email', userEmail || '')]
-            )
-            
-            if (reservedEmails.documents.length > 0) {
+
+          isCreator = await isReservedEmail(userEmail)
+
+          if (!isCreator) {
+            const { data: profile } = await supabase
+              .from('profiles')
+              .select('is_creator')
+              .eq('id', user.id)
+              .maybeSingle()
+            if (profile?.is_creator) {
               isCreator = true
             }
-          } catch {
-            // Reserved emails collection may not exist
           }
-          
-          // Also check profile
-          if (!isCreator) {
-            try {
-              const profiles = await databases.listDocuments(
-                APPWRITE_CONFIG.databaseId,
-                APPWRITE_CONFIG.collections.profiles,
-                [Query.equal('$id', user.$id)]
-              )
-              
-              if (profiles.documents.length > 0 && profiles.documents[0].is_creator) {
-                isCreator = true
-              }
-            } catch {
-              // Profile may not exist
-            }
-          }
-          
-          // Cache the result
-          setCachedCreatorStatus(user.$id, isCreator)
+
+          setCachedCreatorStatus(user.id, isCreator)
           
           console.log('[chat] Creator check (from DB):', { 
             email: userEmail, 
@@ -173,7 +133,7 @@ export async function POST(req: Request) {
 
     if (user) {
       // Check cache first
-      const cachedUserData = getCachedUserData(user.$id)
+      const cachedUserData = getCachedUserData(user.id)
       if (cachedUserData) {
         userName = cachedUserData.userName
         petName = cachedUserData.petName
@@ -183,23 +143,16 @@ export async function POST(req: Request) {
         console.log('[chat] User data (cached):', { userName, petName, gender: dbGender, age: dbAge, tone: dbTone })
       } else {
         try {
-          // Fetch user data (name, pet_name) from Appwrite using service client
-          try {
-            // Use getDocument with the user's ID (since document ID = user ID)
-            const userData = await serviceClient.databases.getDocument(
-              APPWRITE_CONFIG.databaseId,
-              APPWRITE_CONFIG.collections.users,
-              user.$id
-            )
-            
-            if (userData) {
-              userName = userData.display_name
-              petName = userData.pet_name
-              console.log('[chat] User profile found:', { userName, petName })
-            }
-          } catch (e: any) {
-            // User document may not exist yet
-            console.log('[chat] User document not found:', e?.message)
+          const { data: userData } = await supabase
+            .from('users')
+            .select('display_name, pet_name')
+            .eq('id', user.id)
+            .maybeSingle()
+
+          if (userData) {
+            userName = userData.display_name ?? undefined
+            petName = userData.pet_name ?? undefined
+            console.log('[chat] User profile found:', { userName, petName })
           }
 
           // Fallback to email if display_name is not set
@@ -214,44 +167,20 @@ export async function POST(req: Request) {
             console.log('[chat] Using email-derived name:', userName)
           }
 
-          // Fetch user settings (gender, age, tone) from Appwrite using service client
-          try {
-            const settings = await serviceClient.databases.listDocuments(
-              APPWRITE_CONFIG.databaseId,
-              APPWRITE_CONFIG.collections.userSettings,
-              [Query.equal('user_id', user.$id)]
-            )
-            
-            if (settings.documents.length > 0) {
-              const settingsData = settings.documents[0]
-              dbGender = settingsData.gender
-              dbAge = settingsData.age
-              // First check the individual tone field, then fallback to personalization JSON
-              dbTone = settingsData.tone
-              if (!dbTone) {
-                const personalization = settingsData.personalization
-                if (personalization) {
-                  try {
-                    const parsedPersonalization = typeof personalization === 'string' 
-                      ? JSON.parse(personalization) 
-                      : personalization
-                    if (parsedPersonalization?.tone) {
-                      dbTone = parsedPersonalization.tone
-                    }
-                  } catch {
-                    // Ignore parse errors
-                  }
-                }
-              }
-              console.log('[chat] User settings found:', { gender: dbGender, age: dbAge, tone: dbTone })
-            }
-          } catch (e: any) {
-            // Settings may not exist yet
-            console.log('[chat] User settings not found:', e?.message)
+          const { data: settingsData } = await supabase
+            .from('user_settings')
+            .select('gender, age, tone, personalization')
+            .eq('user_id', user.id)
+            .maybeSingle()
+
+          if (settingsData) {
+            dbGender = settingsData.gender ?? undefined
+            dbAge = settingsData.age ?? undefined
+            dbTone = settingsData.tone || settingsData.personalization?.tone || undefined
+            console.log('[chat] User settings found:', { gender: dbGender, age: dbAge, tone: dbTone })
           }
-          
-          // Cache the combined result
-          setCachedUserData(user.$id, { userName, petName, gender: dbGender, age: dbAge, tone: dbTone })
+
+          setCachedUserData(user.id, { userName, petName, gender: dbGender, age: dbAge, tone: dbTone })
         } catch (err) {
           console.error("Failed to fetch user personalization:", err)
           // Fallback to email even on error

@@ -1,42 +1,13 @@
 import { NextRequest } from "next/server"
-import { createServerAppwriteClient, createServiceClient, Query } from "@/lib/appwrite/server"
-import { APPWRITE_CONFIG } from "@/lib/appwrite/config"
-import { errorResponse, successResponse } from "@/lib/api-utils"
+import { createServiceRoleClient } from "@/lib/supabase/server"
+import { errorResponse, successResponse, getAuthenticatedUser, isReservedEmail } from "@/lib/api-utils"
 
-// Helper to verify admin access (user must be in reserved_emails)
-async function verifyAdminAccess(request: NextRequest): Promise<{ user: any; isAdmin: boolean }> {
-  const { account } = await createServerAppwriteClient()
-  const serviceClient = createServiceClient()
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-  let user: any = null
-  try {
-    user = await account.get()
-  } catch (error: any) {
-    const userIdHeader = request.headers.get('x-user-id')
-    if (userIdHeader) {
-      try {
-        user = await serviceClient.users.get(userIdHeader)
-      } catch {
-        return { user: null, isAdmin: false }
-      }
-    }
-  }
-
-  if (!user) {
-    return { user: null, isAdmin: false }
-  }
-
-  // Check if user email is in reserved_emails collection
-  try {
-    const reservedEmails = await serviceClient.databases.listDocuments(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.reservedEmails,
-      [Query.equal("email", user.email)]
-    )
-    return { user, isAdmin: reservedEmails.documents.length > 0 }
-  } catch {
-    return { user, isAdmin: false }
-  }
+async function verifyAdminAccess() {
+  const user = await getAuthenticatedUser()
+  if (!user) return { user: null, isAdmin: false }
+  return { user, isAdmin: await isReservedEmail(user.email) }
 }
 
 // GET /api/admin/chats/[chatId] - Get chat with all messages
@@ -45,59 +16,58 @@ export async function GET(
   { params }: { params: Promise<{ chatId: string }> }
 ) {
   try {
-    const { user, isAdmin } = await verifyAdminAccess(request)
-    
+    const { user, isAdmin } = await verifyAdminAccess()
+
     if (!user) {
       return errorResponse("Unauthorized", 401)
     }
-    
+
     if (!isAdmin) {
       return errorResponse("Forbidden - Admin access required", 403)
     }
 
     const { chatId } = await params
-    const serviceClient = createServiceClient()
+    if (!UUID_REGEX.test(chatId)) {
+      return errorResponse("Failed to fetch chat details", 500)
+    }
+    const supabase = createServiceRoleClient()
 
-    // Get chat
-    const chat = await serviceClient.databases.getDocument(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.chats,
-      chatId
-    )
+    const { data: chat, error: chatError } = await supabase
+      .from("chats")
+      .select("id, user_id, mode, title, message_count, created_at, last_message_at, is_archived")
+      .eq("id", chatId)
+      .single()
+    if (chatError || !chat) throw chatError || new Error("Chat not found")
 
-    // Get messages
-    const messagesResponse = await serviceClient.databases.listDocuments(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.chatMessages,
-      [
-        Query.equal("chat_id", chatId),
-        Query.orderAsc("created_at"),
-        Query.limit(1000)
-      ]
-    )
-
-    const messages = messagesResponse.documents.map((msg: any) => ({
-      id: msg.$id,
-      role: msg.role,
-      content: msg.content,
-      metadata: msg.metadata ? (typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : msg.metadata) : null,
-      createdAt: msg.created_at || msg.$createdAt,
-      isFavorite: msg.is_favorite || false
-    }))
+    const { data: messages, count, error: messagesError } = await supabase
+      .from("chat_messages")
+      .select("id, role, content, metadata, created_at, is_favorite", { count: "exact" })
+      .eq("chat_id", chatId)
+      .order("created_at", { ascending: true })
+      .order("seq_num", { ascending: true })
+      .limit(1000)
+    if (messagesError) throw messagesError
 
     return successResponse({
       chat: {
-        id: chat.$id,
+        id: chat.id,
         userId: chat.user_id,
         mode: chat.mode,
         title: chat.title,
         messageCount: chat.message_count || 0,
-        createdAt: chat.created_at || chat.$createdAt,
+        createdAt: chat.created_at,
         lastMessageAt: chat.last_message_at,
         isArchived: chat.is_archived || false
       },
-      messages,
-      totalMessages: messagesResponse.total
+      messages: (messages || []).map((msg) => ({
+        id: msg.id,
+        role: msg.role,
+        content: msg.content,
+        metadata: msg.metadata ?? null,
+        createdAt: msg.created_at,
+        isFavorite: msg.is_favorite || false
+      })),
+      totalMessages: count ?? 0
     })
   } catch (error: any) {
     console.error("Error fetching chat details:", error)
@@ -111,40 +81,25 @@ export async function DELETE(
   { params }: { params: Promise<{ chatId: string }> }
 ) {
   try {
-    const { user, isAdmin } = await verifyAdminAccess(request)
-    
+    const { user, isAdmin } = await verifyAdminAccess()
+
     if (!user) {
       return errorResponse("Unauthorized", 401)
     }
-    
+
     if (!isAdmin) {
       return errorResponse("Forbidden - Admin access required", 403)
     }
 
     const { chatId } = await params
-    const serviceClient = createServiceClient()
-
-    // Delete all messages first
-    const messagesResponse = await serviceClient.databases.listDocuments(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.chatMessages,
-      [Query.equal("chat_id", chatId), Query.limit(1000)]
-    )
-
-    for (const message of messagesResponse.documents) {
-      await serviceClient.databases.deleteDocument(
-        APPWRITE_CONFIG.databaseId,
-        APPWRITE_CONFIG.collections.chatMessages,
-        message.$id
-      )
+    if (!UUID_REGEX.test(chatId)) {
+      return errorResponse("Failed to delete chat", 500)
     }
+    const supabase = createServiceRoleClient()
 
-    // Delete the chat
-    await serviceClient.databases.deleteDocument(
-      APPWRITE_CONFIG.databaseId,
-      APPWRITE_CONFIG.collections.chats,
-      chatId
-    )
+    // Messages cascade from the chat row
+    const { error } = await supabase.from("chats").delete().eq("id", chatId)
+    if (error) throw error
 
     return successResponse({ message: "Chat deleted successfully" })
   } catch (error: any) {

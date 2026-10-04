@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { localChatStorage } from "@/lib/services/local-chat-storage"
 import { localFavoritesStorage } from "@/lib/services/local-favorites-storage"
-import { chatService } from "@/lib/appwrite/chat-service"
+import { chatService } from "@/lib/supabase/chat-service"
 import { MODES } from "@/lib/constants"
 import type { Chat, Mode } from "@/types/chat"
 

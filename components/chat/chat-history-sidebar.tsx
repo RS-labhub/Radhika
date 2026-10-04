@@ -18,7 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { chatService } from "@/lib/appwrite/chat-service"
+import { chatService } from "@/lib/supabase/chat-service"
 import { localChatStorage } from "@/lib/services/local-chat-storage"
 
 interface ChatHistorySidebarProps {
@@ -137,7 +137,7 @@ export function ChatHistorySidebar({
       setIsDeleting(true)
       // Delete from localStorage first (always works)
       localChatStorage.deleteChat(chatToDelete)
-      // Then try to delete from Appwrite (may fail for local-only chats, which is fine)
+      // Then try to delete from the server (may fail for local-only chats, which is fine)
       try {
         await chatService.deleteChat(chatToDelete)
       } catch (err: any) {
@@ -146,7 +146,7 @@ export function ChatHistorySidebar({
         if (errMsg.includes("not found") || errMsg.includes("Chat not found")) {
           console.log("Chat was local-only, already deleted from localStorage:", chatToDelete)
         } else {
-          console.warn("Could not delete from Appwrite:", err)
+          console.warn("Could not delete from server:", err)
         }
       }
       onDeleteChat?.(chatToDelete)
@@ -165,11 +165,11 @@ export function ChatHistorySidebar({
       setIsDeleting(true)
       // Delete from localStorage first (always works)
       localChatStorage.deleteAllChats()
-      // Then try to delete from Appwrite (may fail, but local is already gone)
+      // Then try to delete from the server (may fail, but local is already gone)
       try {
         await chatService.deleteAllChats()
       } catch (err) {
-        console.log("Could not delete all from Appwrite:", err)
+        console.log("Could not delete all from server:", err)
       }
       onDeleteAllChats?.()
       onRefresh?.()

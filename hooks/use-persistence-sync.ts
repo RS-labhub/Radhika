@@ -7,7 +7,7 @@ import type { Mode, Provider } from "@/types/chat"
 
 /**
  * Tracks which messages have been persisted and handles syncing messages to
- * localStorage + Appwrite via the persistence hook.
+ * localStorage + Supabase via the persistence hook.
  */
 export interface UsePersistenceSyncReturn {
   persistedMessageIdsRef: React.MutableRefObject<Set<string>>

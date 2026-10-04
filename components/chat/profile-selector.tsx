@@ -54,8 +54,7 @@ export function ProfileSelector({
 
   const isPixel = uiStyle === "pixel"
 
-  // Get user ID (Appwrite uses $id)
-  const userId = user?.$id
+  const userId = user?.id
 
   // Load profiles for current mode
   useEffect(() => {

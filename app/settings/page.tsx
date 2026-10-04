@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/contexts/auth-context"
+import { getSupabaseClient } from "@/lib/supabase/client"
 import { useTheme } from "next-themes"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -44,8 +45,6 @@ import {
   BookOpen
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { getStorage } from "@/lib/appwrite/client"
-import { APPWRITE_CONFIG } from "@/lib/appwrite/config"
 import type { UserGender, UserAge, ConversationTone } from "@/types/chat"
 
 interface Provider {
@@ -80,7 +79,7 @@ const AI_PROVIDERS: Provider[] = [
     keyName: "GROQ_API_KEY",
     placeholder: "gsk_...",
     docsUrl: "https://console.groq.com/keys",
-    models: ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "qwen/qwen3-32b"],
+    models: ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"],
   },
   {
     id: "gemini",
@@ -114,7 +113,6 @@ export default function SettingsPage() {
   const { user, isLoading: authLoading, signIn } = useAuth()
   const router = useRouter()
   const { theme, setTheme } = useTheme()
-  const avatarBucketId = APPWRITE_CONFIG.buckets.avatars
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [isLoading, setIsLoading] = useState(true)
@@ -163,34 +161,6 @@ export default function SettingsPage() {
   const [isMounted, setIsMounted] = useState(false)
   const [selectedTheme, setSelectedTheme] = useState<string>("system")
 
-  // Resolve stored avatar references (full URL or storage path) into a usable URL
-  const resolveAvatarUrl = async (stored: string) => {
-    if (!stored) return ""
-    // Already a full URL
-    if (stored.startsWith("http")) return stored
-
-    // For Appwrite storage, construct the file view URL
-    try {
-      const storage = getStorage()
-      const fileUrl = storage.getFileView(avatarBucketId, stored)
-      return fileUrl.toString()
-    } catch (e) {
-      console.warn("Failed to get avatar URL from Appwrite:", e)
-      return stored
-    }
-  }
-
-  // Stub for compatibility - Appwrite doesn't use signed URLs the same way
-  const getPublicAvatarUrl = (fileId: string) => {
-    if (!fileId) return ""
-    try {
-      const storage = getStorage()
-      return storage.getFileView(avatarBucketId, fileId).toString()
-    } catch {
-      return ""
-    }
-  }
-
   useEffect(() => {
     setIsMounted(true)
     if (theme) setSelectedTheme(theme)
@@ -230,7 +200,7 @@ export default function SettingsPage() {
   }, [loadError])
 
   // SessionStorage cache key and duration
-  const CACHE_KEY = `settings_data_${user?.$id || 'anon'}`
+  const CACHE_KEY = `settings_data_${user?.id || 'anon'}`
   const CACHE_DURATION = 5 * 60 * 1000 // 5 minutes
 
   const loadFromCache = () => {
@@ -328,15 +298,11 @@ export default function SettingsPage() {
         let loadedAvatarUrl = ""
 
         try {
-          const userIdCookie = document.cookie.split('; ').find(row => row.startsWith('appwrite-user-id='))
-          const userId = userIdCookie ? userIdCookie.split('=')[1] : user.$id
-
           const response = await fetch('/api/users', {
             method: 'GET',
             credentials: 'include',
             headers: {
-              'Content-Type': 'application/json',
-              'x-user-id': userId
+              'Content-Type': 'application/json'
             }
           })
 
@@ -354,7 +320,7 @@ export default function SettingsPage() {
               
               if (data.profile.avatar_url) {
                 try {
-                  loadedAvatarUrl = await resolveAvatarUrl(data.profile.avatar_url)
+                  loadedAvatarUrl = sharedResolveAvatarUrl(data.profile.avatar_url) || ""
                   setAvatarUrl(loadedAvatarUrl)
                 } catch (e) {
                   console.warn("Failed to resolve avatar URL", e)
@@ -474,15 +440,9 @@ export default function SettingsPage() {
       const formData = new FormData()
       formData.append('avatar', file)
 
-      const userIdCookie = document.cookie.split('; ').find(row => row.startsWith('appwrite-user-id='))
-      const userId = userIdCookie ? userIdCookie.split('=')[1] : user.$id
-
       const response = await fetch('/api/users/avatar', {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'x-user-id': userId
-        },
         body: formData
       })
 
@@ -517,15 +477,11 @@ export default function SettingsPage() {
     try {
       setIsSaving(true)
 
-      const userIdCookie = document.cookie.split('; ').find(row => row.startsWith('appwrite-user-id='))
-      const userId = userIdCookie ? userIdCookie.split('=')[1] : user.$id
-
       const response = await fetch('/api/users', {
         method: 'PATCH',
         credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': userId
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           display_name: displayName.trim(),
@@ -572,7 +528,6 @@ export default function SettingsPage() {
         credentials: "include",
         headers: {
           "Content-Type": "application/json",
-          ...(user?.$id && { "x-user-id": user.$id }),
         },
         body: JSON.stringify({ password: deletePassword })
       })
@@ -592,10 +547,8 @@ export default function SettingsPage() {
       
       // Clear the session and sign out before redirecting
       try {
-        // Clear session cookies
-        document.cookie = 'appwrite-session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
-        document.cookie = 'appwrite-user-id=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT'
-        
+        await getSupabaseClient().auth.signOut({ scope: "local" })
+
         // Trigger sign out event for other components
         if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
           window.dispatchEvent(new CustomEvent("radhika:signOut"))
@@ -624,15 +577,11 @@ export default function SettingsPage() {
 
       const personalization = { gender, age, tone }
 
-      const userIdCookie = document.cookie.split('; ').find(row => row.startsWith('appwrite-user-id='))
-      const userId = userIdCookie ? userIdCookie.split('=')[1] : user.$id
-
       const response = await fetch('/api/users', {
         method: 'PATCH',
         credentials: 'include',
         headers: {
-          'Content-Type': 'application/json',
-          'x-user-id': userId
+          'Content-Type': 'application/json'
         },
         body: JSON.stringify({ personalization })
       })

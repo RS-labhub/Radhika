@@ -6,8 +6,7 @@
     "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "setup-appwrite": "npx ts-node scripts/setup-appwrite-schema.ts"
+    "lint": "next lint"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "latest",
@@ -44,10 +43,11 @@
     "@radix-ui/react-toggle": "1.1.1",
     "@radix-ui/react-toggle-group": "1.1.1",
     "@radix-ui/react-tooltip": "1.1.6",
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.2",
     "@vercel/analytics": "^1.5.0",
     "@vercel/speed-insights": "^1.2.0",
     "ai": "latest",
-    "appwrite": "^21.5.0",
     "autoprefixer": "^10.4.20",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -62,7 +62,6 @@
     "lucide-react": "^0.454.0",
     "next": "^16.0.10",
     "next-themes": "^0.4.4",
-    "node-appwrite": "^21.1.0",
     "react": "^19.2.3",
     "react-day-picker": "8.10.1",
     "react-dom": "^19.2.3",

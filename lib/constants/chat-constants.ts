@@ -96,7 +96,7 @@ export const PROVIDERS: Record<Provider, ProviderDefinition> = {
   groq: {
     name: "Groq",
     description: "Fast and efficient LLM",
-    models: ["llama-3.1-8b-instant", "llama-3.3-70b-versatile", "qwen/qwen3-32b"],
+    models: ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.8-27b"],
     requiresApiKey: false,
     color: "pink",
   },
