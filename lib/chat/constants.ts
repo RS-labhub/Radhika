@@ -115,7 +115,7 @@ export const PROVIDERS: Record<Provider, ProviderDefinition> = {
   claude: {
     name: "Claude",
     description: "Anthropic's helpful assistant",
-    models: ["claude-opus-4-1-20250805", "claude-opus-4-1", "claude-3-haiku"],
+    models: ["claude-opus-4-8", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"],
     requiresApiKey: true,
     color: "orange",
   },
