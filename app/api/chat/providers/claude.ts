@@ -27,7 +27,7 @@ export async function handleClaudeRequest(
     model: anthropicClient(modelId),
     system: systemPrompt,
     messages,
-    temperature: mode === "creative" ? 0.8 : mode === "bff" ? 0.9 : 0.7,
+    // No temperature: Claude Sonnet 5.5 rejects sampling parameters with a 400.
   })
 
   console.log("Claude request successful, streaming response")
