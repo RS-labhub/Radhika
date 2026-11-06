@@ -15,8 +15,8 @@ export const MODELS = {
     fast: "gpt-4o-mini",
   },
   claude: {
-    default: "claude-opus-4-1-20250805",
-    sonnet: "claude-sonnet-4-5-20250929",
+    default: "claude-opus-4-8",
+    sonnet: "claude-sonnet-5-5",
     haiku: "claude-haiku-4-5-20251001",
   },
 }
