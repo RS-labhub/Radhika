@@ -71,7 +71,7 @@ const AI_PROVIDERS: Provider[] = [
     keyName: "CLAUDE_API_KEY",
     placeholder: "sk-ant-...",
     docsUrl: "https://console.anthropic.com/account/keys",
-    models: ["claude-opus-4-1-20250805", "claude-opus-4-1", "claude-3-haiku"],
+    models: ["claude-opus-4-8", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"],
   },
   {
     id: "groq",
